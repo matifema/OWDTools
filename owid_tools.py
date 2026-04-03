@@ -409,6 +409,14 @@ class Tools:
         if tab:
             query_params.append(f"tab={tab}")
         if countries:
+            try:
+                df = _cached_fetch_df(slug)
+                country_col, _ = _detect_cols(df)
+                if country_col:
+                    available = df[country_col].dropna().unique().tolist()
+                    countries = [_fuzzy_match_country(c, available) for c in countries]
+            except Exception:
+                pass
             import urllib.parse
             country_str = "~".join(countries)
             query_params.append(f"country={urllib.parse.quote(country_str)}")
