@@ -3,7 +3,7 @@
 Welcome to the OWID Data Tools codebase! This guide provides essential context, rules, and style conventions for AI agents operating in this repository. 
 
 ## 1. Project Overview
-This repository contains an Open WebUI-compatible tool plugin (`owid_tools.py`) for searching, fetching, and visualizing data from Our World in Data (OWID). It uses `pandas` for data manipulation, `owid-catalog` for fetching data, and `plotly` to render interactive HTML charts with an ASCII fallback.
+This repository contains an Open WebUI-compatible tool plugin (`owid_tools.py`) for searching, fetching, and visualizing data from Our World in Data (OWID). It uses `pandas` for data manipulation, `owid-catalog` for fetching data, and embeds official OWID interactive charts via iframes.
 
 ## 2. Build, Lint, and Test Commands
 
@@ -49,9 +49,9 @@ Currently, the project is a single-file Python module. However, the following st
 ### 3.5 Specific Design Patterns
 - **Valves:** Use Pydantic's `BaseModel` for configuration parameters (Valves).
 - **Data manipulation:** Drop NaN values instead of filling with zeroes to prevent charting artifacts. Use `pandas` safely, ensuring types are coerced properly (e.g., year columns cast to integers).
-- **Visuals:** Follow the dark-mode distinct color palette (`_SERIES_COLORS`) and ensure any HTML generated is self-contained and responsive.
+- **Visuals:** Visualizations rely on official OWID grapher iframes. Ensure HTML snippets map correctly to chart sizes based on user preferences.
 
 ## 4. Workflows for Modifications
-- When modifying data fetching logic, always ensure the fallback (ASCII rendering) is updated if necessary.
+- When modifying data fetching logic, ensure dataframe manipulation handles edge cases smoothly.
 - Before claiming a task is done, ensure `owid_tools.py` has valid syntax by running `python -m py_compile owid_tools.py`.
 - Do not introduce heavy new dependencies unless strictly necessary. Rely on `pandas` and built-in Python libraries.

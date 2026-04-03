@@ -48,20 +48,6 @@ except Exception:
     HTMLResponse = None
 
 
-# ── Colour palette (dark-mode, distinct) ─────────────────────────────────────
-_SERIES_COLORS = [
-    "#60a5fa", "#f472b6", "#34d399", "#fb923c",
-    "#a78bfa", "#facc15", "#22d3ee", "#f87171",
-]
-
-_PLOTLY_CDN = "2.27.0"
-_BG    = "#0b0f14"
-_PANEL = "#111827"
-_TEXT  = "#e5e7eb"
-_MUTED = "#94a3b8"
-_BORDER = "#374151"
-_GRID  = "#1f2937"
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -89,75 +75,6 @@ def _detect_cols(df: pd.DataFrame):
         (v for k, v in lc.items() if "year" in k or "date" in k or "day" in k), None
     )
     return country_col, year_col
-
-
-def _detect_value_col(df: pd.DataFrame, structural: set, override: Optional[str]):
-    """Return the first numeric column that isn't structural."""
-    if override and override in df.columns:
-        return override
-    return next(
-        (
-            c for c in df.columns
-            if str(c).lower() not in structural
-            and pd.api.types.is_numeric_dtype(df[c])
-        ),
-        None,
-    )
-
-
-def _clean_series(
-    df: pd.DataFrame,
-    country_col,
-    year_col: str,
-    val_col: str,
-    country: Optional[str],
-    year_start: Optional[Any],
-    year_end: Optional[Any],
-) -> pd.DataFrame:
-    """
-    Filter, cast year to int, deduplicate (entity x year), sort.
-    NaN values are dropped — never filled with 0.
-    Returns a clean two-column frame [year_col, val_col].
-    """
-    # Country filter
-    if country and country_col:
-        available = df[country_col].dropna().unique().tolist()
-        matched_country = _fuzzy_match_country(country, available)
-        df = df[df[country_col].astype(str) == matched_country]
-
-    # Keep only the two columns we need to minimize memory and copy cost
-    df = df[[year_col, val_col]].copy()
-
-    is_date = pd.api.types.is_datetime64_any_dtype(df[year_col])
-    if not is_date:
-        first_valid = df[year_col].dropna().iloc[0] if not df[year_col].dropna().empty else None
-        if first_valid is not None and isinstance(first_valid, str) and len(first_valid) >= 10:
-            import re
-            is_date = bool(re.match(r'^\d{4}-\d{2}-\d{2}', str(first_valid)))
-
-    if is_date:
-        df[year_col] = pd.to_datetime(df[year_col], errors="coerce")
-    else:
-        df[year_col] = pd.to_numeric(df[year_col], errors="coerce")
-    df = df.dropna(subset=[year_col])
-    if not is_date:
-        df[year_col] = df[year_col].astype(int)
-
-    # Year/Date range filter
-    if year_start is not None:
-        start_val = pd.to_datetime(year_start) if is_date else float(year_start)
-        df = df[df[year_col] >= start_val]
-    if year_end is not None:
-        end_val = pd.to_datetime(year_end) if is_date else float(year_end)
-        df = df[df[year_col] <= end_val]
-
-    df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
-
-    # Deduplicate: multiple source rows per year -> take mean
-    df = df.groupby(year_col, as_index=False)[val_col].mean()
-
-    return df.sort_values(year_col).reset_index(drop=True)
-
 
 def _country_sample(df: pd.DataFrame, country_col) -> str:
     if country_col is None:
@@ -191,203 +108,6 @@ def _fuzzy_match_country(target: str, available: list) -> str:
     matches = difflib.get_close_matches(target, str_available, n=1, cutoff=0.5)
     return matches[0] if matches else target
 
-def test_custom_chart_validation():
-    # Test validation logic
-    from owid_tools import _validate_layout
-    assert _validate_layout({"xaxis": {"title": "Test"}}) == {"xaxis": {"title": "Test"}}
-    assert _validate_layout({"paper_bgcolor": "red"}) == {}
-    assert _validate_layout({"annotations": [{"x": 1, "y": 2}]}) == {"annotations": [{"x": 1, "y": 2}]}
-
-    # Test custom_chart injection (Malicious payload test)
-    # Ensure it returns an empty layout or sanitizes, rather than executing scripts.
-    malicious = {"paper_bgcolor": "javascript:alert(1)", "title": {"text": "<script>alert(1)</script>"}}
-    validated = _validate_layout(malicious)
-    assert "paper_bgcolor" not in validated
-    assert validated["title"]["text"] == "<script>alert(1)</script>"
-
-
-def _validate_layout(config: dict) -> dict:
-    """Only allow safe, non-styling layout properties."""
-    allowed = {
-        "xaxis", "yaxis", "legend", "annotations", "shapes",
-        "margin", "title", "hovermode", "hoverlabel",
-    }
-    def _is_safe(k, v):
-        if k not in allowed: return False
-        # Recurse for nested dicts (like xaxis/yaxis)
-        if isinstance(v, dict):
-            for nk, nv in v.items():
-                if not _is_safe(nk, nv): return False
-        return True
-
-    return {k: v for k, v in config.items() if _is_safe(k, v)}
-def _build_html(title: str, traces: list, x_label: str, y_label: str, height: int = 460, extra_layout: Optional[dict] = None) -> str:
-    """Render a self-contained dark-mode Plotly HTML page."""
-    layout = {
-        "title": {
-            "text": title,
-            "font": {"size": 15, "color": _TEXT},
-            "x": 0.04,
-        },
-        "paper_bgcolor": _PANEL,
-        "plot_bgcolor":  _BG,
-        "font":   {"color": _TEXT, "family": "system-ui, -apple-system, sans-serif"},
-        "margin": {"l": 72, "r": 24, "t": 52, "b": 52},
-        "legend": {
-            "bgcolor": "rgba(0,0,0,0)",
-            "bordercolor": _BORDER,
-            "borderwidth": 1,
-            "font": {"color": _TEXT, "size": 12},
-        },
-        "xaxis": {
-            "gridcolor": _GRID,
-            "linecolor": _BORDER,
-            "tickcolor": _BORDER,
-            "tickformat": "d",
-            "title": {"text": x_label, "font": {"size": 12, "color": _MUTED}},
-            "tickfont": {"color": _MUTED},
-        },
-        "yaxis": {
-            "gridcolor": _GRID,
-            "linecolor": _BORDER,
-            "tickcolor": _BORDER,
-            "title": {"text": y_label, "font": {"size": 12, "color": _MUTED}},
-            "tickfont": {"color": _MUTED},
-            "zeroline": False,
-            "tickformat": "~s",
-        },
-        "hovermode": "x unified",
-        "hoverlabel": {
-            "bgcolor": _PANEL,
-            "bordercolor": _BORDER,
-            "font": {"color": _TEXT, "size": 12},
-        },
-    }
-    if extra_layout:
-        layout.update(_validate_layout(extra_layout))
-
-    return f"""<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>{html.escape(title)}</title>
-<style>
-*,*::before,*::after{{box-sizing:border-box}}
-html,body{{
-  margin:0;padding:0;width:100%;
-  background:{_BG};color:{_TEXT};
-  font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-  font-size:14px;overflow:visible;
-}}
-#chart{{width:100%;height:{height}px;padding:12px 12px 4px}}
-#fs-btn{{
-  position:fixed;top:8px;right:8px;z-index:9999;
-  background:rgba(17,24,39,0.9);color:{_TEXT};
-  border:1px solid {_BORDER};border-radius:6px;
-  padding:3px 10px;cursor:pointer;font-size:11px;
-  opacity:0.4;transition:opacity 0.2s;user-select:none;
-}}
-#fs-btn:hover{{opacity:1}}
-</style>
-</head><body>
-<button id="fs-btn" onclick="toggleFS()">⛶ Fullscreen</button>
-<div id="chart"></div>
-<script src="https://cdn.plot.ly/plotly-{_PLOTLY_CDN}.min.js"></script>
-<script>
-(function(){{
-  var traces = {json.dumps(traces)};
-  var layout = {json.dumps(layout)};
-  var config = {{
-    responsive: true,
-    displayModeBar: true,
-    modeBarButtonsToRemove: ["select2d","lasso2d","autoScale2d","toggleSpikelines"],
-    toImageButtonOptions: {{format:"png", scale:2, filename:{json.dumps(title)}}},
-    displaylogo: false,
-  }};
-  Plotly.newPlot("chart", traces, layout, config);
-
-  function toggleFS(){{
-    if(!document.fullscreenElement)
-      document.documentElement.requestFullscreen?.();
-    else
-      document.exitFullscreen?.();
-  }}
-  window.toggleFS = toggleFS;
-  document.addEventListener("fullscreenchange", function(){{
-    document.getElementById("fs-btn").textContent =
-      document.fullscreenElement ? "✕ Exit" : "⛶ Fullscreen";
-  }});
-
-  function syncHeight(){{
-    var h = document.documentElement.scrollHeight;
-    try{{ if(window.frameElement) window.frameElement.style.height = h + "px"; }}catch(e){{}}
-    try{{ window.parent.postMessage({{type:"iframe-resize", height:h}}, "*"); }}catch(e){{}}
-  }}
-  window.addEventListener("load", syncHeight);
-  if(typeof ResizeObserver !== "undefined")
-    new ResizeObserver(syncHeight).observe(document.body);
-  [300, 900, 2000].forEach(function(t){{ setTimeout(syncHeight, t); }});
-}})();
-</script>
-</body></html>"""
-
-
-def _ascii_fallback(traces: list, title: str) -> str:
-    h = 10
-    lines = [f"### {title}", ""]
-    for t in traces:
-        y    = [v for v in t.get("y", []) if v is not None]
-        x    = t.get("x", [])
-        name = t.get("name", "")
-        if not y:
-            continue
-        max_y = max(y)
-        min_y = min(y)
-        rng   = max_y - min_y or 1.0
-        grid  = [[" "] * (len(y) * 2) for _ in range(h)]
-        for i, v in enumerate(y):
-            r = int((max_y - v) / rng * (h - 1))
-            r = max(0, min(h - 1, r))
-            grid[r][i * 2] = "●"
-        if name:
-            lines.append(f"**{name}**")
-        lines.append("```text")
-        for i, row in enumerate(grid):
-            thr = max_y - (rng * i / (h - 1)) if h > 1 else max_y
-            lines.append(f"{thr:9.2f} |{''.join(row)}")
-        lines.append("         +" + "--" * len(y))
-        tick_row = "           " + "".join(f"{str(x[i])[:4]:4} " for i in range(min(len(x), 12)))
-        lines.append(tick_row)
-        lines.append("```\n")
-    return "\n".join(lines)
-
-
-def _make_trace(x: list, y: list, name: str, color: str, chart_type: str = "line") -> dict:
-    """
-    Build a Plotly trace. y values are raw floats — never filled with 0.
-    connectgaps=False means missing data shows as a gap, not a spike to zero.
-    """
-    ct = chart_type.lower().strip()
-    if ct == "bar":
-        return {
-            "type":   "bar",
-            "name":   name,
-            "x":      x,
-            "y":      y,
-            "marker": {"color": color},
-        }
-    return {
-        "type":        "scatter",
-        "mode":        "lines+markers" if ct == "line" else "markers",
-        "name":        name,
-        "x":           x,
-        "y":           y,
-        "connectgaps": False,
-        "line":        {"color": color, "width": 2},
-        "marker":      {"size": 4, "color": color},
-    }
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Tools:
@@ -396,7 +116,8 @@ class Tools:
 
     Workflow:
       1. search_owid   → discover slugs + valid country names
-      2. chart_owid_data or compare_owid_countries → visualise
+      2. embed_owid_grapher → embed official OWID interactive chart (Recommended)
+         chart_owid_data or compare_owid_countries → generate custom Plotly charts
          get_owid_data → raw table (only when numbers are explicitly needed)
     """
 
@@ -411,15 +132,8 @@ class Tools:
         chart_height_px: int = Field(460, description="Chart height in pixels.")
         max_table_rows: int  = Field(20,  description="Max rows from get_owid_data.")
         max_search_results: int = Field(5, description="Max results from search_owid.")
-
     def _can_embed(self) -> bool:
         return self.valves.allow_external_cdn and HTMLResponse is not None
-
-    def _render(self, title: str, traces: list, x_label: str, y_label: str, extra_layout: Optional[dict] = None) -> Any:
-        page = _build_html(title, traces, x_label, y_label, self.valves.chart_height_px, extra_layout=extra_layout)
-        if self._can_embed():
-            return HTMLResponse(content=page, headers={"Content-Disposition": "inline"})
-        return _ascii_fallback(traces, title)
     # ─────────────────────────────────────────────────────────────────────────
 
     async def search_owid(
@@ -500,185 +214,33 @@ class Tools:
 
         return "\n".join(lines)
 
-    # ─────────────────────────────────────────────────────────────────────────
-
     async def chart_owid_data(
         self,
         slug: str,
-        country: Optional[str] = None,
-        year_start: Optional[Any] = None,
-        year_end: Optional[Any] = None,
-        chart_type: str = "line",
-        value_column: Optional[str] = None,
+        **kwargs
     ) -> Any:
         """
-        Fetch data for one country/entity and render an interactive Plotly chart.
-
-        Prefer this over get_owid_data whenever the goal is a visualisation.
-        Call search_owid first to get a valid slug.
+        Embed the official Our World in Data interactive grapher.
+        
+        This provides the most complete and authentic OWID visualisation,
+        often including maps, multi-country comparisons, and rich metadata.
 
         Args:
-            slug:         Slug from search_owid, e.g. 'life-expectancy',
-                          'co2-emissions-per-capita'. Copy exactly — do not guess.
-            country:      Entity name from search_owid's countries list.
-                          Examples: 'Italy', 'United States', 'South Korea'.
-                          Omit to auto-select 'World' or the first available entity.
-            year_start:   Start year inclusive, e.g. 1990.
-            year_end:     End year inclusive, e.g. 2023.
-            chart_type:   'line' (default), 'bar', or 'scatter'.
-            value_column: Numeric column to plot. Leave blank for auto-detection.
+            slug: Slug from search_owid, e.g. 'life-expectancy'.
         """
-        if fetch is None:
-            return "Error: owid-catalog not installed."
-
-        try:
-            df = _cached_fetch_df(slug).copy()
-        except Exception as e:
-            return f"Error fetching '{slug}': {e}"
-
-        country_col, year_col = _detect_cols(df)
-        if year_col is None:
-            return f"Cannot chart '{slug}': no year column detected. Use get_owid_data to inspect."
-
-        # Auto-pick entity
-        chosen = country
-        if not chosen and country_col:
-            preferred = ["World", "world"]
-            chosen = next((e for e in preferred if e in df[country_col].values), None)
-            if not chosen and not df.empty:
-                chosen = str(df[country_col].iloc[0])
-
-        structural = {
-            str(country_col).lower() if country_col else "",
-            str(year_col).lower(), "code", "entity_code", "country_code",
-        }
-        val_col = _detect_value_col(df, structural, value_column)
-        if val_col is None:
-            return (
-                f"Could not detect a numeric value column in '{slug}'.\n"
-                f"Columns: {list(df.columns)}\nRetry with value_column='<name>'."
-            )
-
-        clean = _clean_series(df, country_col, year_col, val_col, chosen, year_start, year_end)
-        if clean.empty:
-            return (
-                f"No data for '{chosen}' in '{slug}'.\n"
-                f"Sample valid names: {_country_sample(df, country_col)}\n"
-                "Check search_owid available_countries and retry."
-            )
-
-        chart_title = f"{slug.replace('-', ' ').title()} — {chosen or ''}"
-        y_label     = str(val_col).replace("_", " ").title()
-
-        trace = _make_trace(
-            x=clean[year_col].tolist(),
-            y=[float(v) for v in clean[val_col].tolist()],
-            name=chosen or "",
-            color=_SERIES_COLORS[0],
-            chart_type=chart_type,
-        )
-        return self._render(chart_title, [trace], "Year", y_label)
-
-    async def custom_chart(
-        self,
-        slug: str,
-        country: Optional[str] = None,
-        year_start: Optional[Any] = None,
-        year_end: Optional[Any] = None,
-        custom_js_config: Optional[dict] = None,
-        value_column: Optional[str] = None,
-    ) -> Any:
-        """Fetch data and render a chart with custom Plotly configuration."""
-        if fetch is None:
-            return "Error: owid-catalog not installed."
-        try:
-            df = _cached_fetch_df(slug).copy()
-        except Exception as e:
-            return f"Error fetching '{slug}': {e}"
-        country_col, year_col = _detect_cols(df)
-        structural = {str(country_col).lower() if country_col else "", str(year_col).lower(), "code", "entity_code", "country_code"}
-        val_col = _detect_value_col(df, structural, value_column)
-        clean = _clean_series(df, country_col, year_col, val_col, country, year_start, year_end)
-        if clean.empty: return "No data found."
-        trace = _make_trace(x=clean[year_col].tolist(), y=[float(v) for v in clean[val_col].tolist()], name=country or "", color=_SERIES_COLORS[0])
-        return self._render(f"{slug} chart", [trace], "Year", str(val_col), extra_layout=custom_js_config)
-
-    # ─────────────────────────────────────────────────────────────────────────
-
-    async def compare_owid_countries(
-        self,
-        slug: str,
-        countries: List[str],
-        year_start: Optional[Any] = None,
-        year_end: Optional[Any] = None,
-        value_column: Optional[str] = None,
-    ) -> Any:
+        url = f"https://ourworldindata.org/grapher/{slug}"
+        height = self.valves.chart_height_px + 140  # Official grapher needs more space for controls
+        html_content = f"""
+        <iframe src="{url}" loading="lazy" style="width: 100%; height: {height}px; border: 0px none; border-radius: 4px;"></iframe>
+        <div style="text-align: center; margin-top: 8px; font-family: system-ui, -apple-system, sans-serif;">
+            <a href="{url}" target="_blank" style="color: #94a3b8; text-decoration: none; font-size: 13px;">
+                View on Our World in Data ↗
+            </a>
+        </div>
         """
-        Fetch data for 2–8 countries and overlay them on one chart.
-
-        Use when the user wants to compare a metric across countries,
-        e.g. "compare CO2 emissions in Italy, France and Germany since 1990".
-        Call search_owid first for the slug and exact country names.
-        """
-        if fetch is None:
-            return "Error: owid-catalog not installed."
-        if not countries:
-            return "Provide at least 2 country names."
-
-        try:
-            df = _cached_fetch_df(slug).copy()
-        except Exception as e:
-            return f"Error fetching '{slug}': {e}"
-
-        country_col, year_col = _detect_cols(df)
-        if year_col is None:
-            return f"Cannot chart '{slug}': no year column found."
-
-        structural = {
-            str(country_col).lower() if country_col else "",
-            str(year_col).lower(), "code", "entity_code", "country_code",
-        }
-        val_col = _detect_value_col(df, structural, value_column)
-        if val_col is None:
-            return (
-                f"Could not detect a numeric value column.\n"
-                f"Columns: {list(df.columns)}\nRetry with value_column='<name>'."
-            )
-
-        traces, missing = [], []
-
-        for idx, country in enumerate(countries[:8]):
-            clean = _clean_series(
-                df, country_col, year_col, val_col,
-                country, year_start, year_end,
-            )
-            if clean.empty:
-                missing.append(country)
-                continue
-            traces.append(_make_trace(
-                x=clean[year_col].tolist(),
-                y=[float(v) for v in clean[val_col].tolist()],
-                name=country,
-                color=_SERIES_COLORS[idx % len(_SERIES_COLORS)],
-                chart_type="line",
-            ))
-
-        if not traces:
-            return (
-                f"No data found for any of: {countries}.\n"
-                f"Sample valid names: {_country_sample(df, country_col)}"
-            )
-
-        chart_title = f"{slug.replace('-', ' ').title()} — Comparison"
-        y_label     = str(val_col).replace("_", " ").title()
-        result      = self._render(chart_title, traces, "Year", y_label)
-
-        if missing and isinstance(result, str):
-            result += f"\n\n> Warning: no data for {', '.join(missing)}"
-
-        return result
-
-    # ─────────────────────────────────────────────────────────────────────────
+        if self._can_embed():
+            return HTMLResponse(content=html_content, headers={"Content-Disposition": "inline"})  # type: ignore
+        return f"External embedding disabled (CDN off). View official chart here: {url}"
 
     async def get_owid_data(
         self,
@@ -692,7 +254,7 @@ class Tools:
         Fetch raw OWID data as a plain-text table.
 
         Use only when the user explicitly needs numbers.
-        For any visualisation use chart_owid_data or compare_owid_countries.
+        For any visualisation use chart_owid_data.
 
         Args:
             slug: Slug from search_owid.
