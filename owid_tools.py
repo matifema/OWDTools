@@ -218,8 +218,8 @@ html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-fam
 <script src="https://cdn.plot.ly/plotly-{_PLOTLY_CDN}.min.js"></script>
 <script>
 (function(){{
-  var traces = {{json.dumps(traces)}};
-  var layout = {{json.dumps(layout)}};
+  var traces = {json.dumps(traces)};
+  var layout = {json.dumps(layout)};
   var config = {{responsive: true, displayModeBar: true, displaylogo: false}};
   Plotly.newPlot("chart", traces, layout, config);
   function syncHeight(){{
@@ -398,7 +398,7 @@ class Tools:
         often including maps, multi-country comparisons, and rich metadata.
 
         Args:
-            slug: Slug from search_owid, e.g. 'life-expectancy'.
+            slug: EXACT slug returned by search_owid. Do NOT guess or hallucinate.
             tab: Optional chart view ('chart', 'map', or 'table').
             countries: Optional list of specific country names to pre-filter in the chart.
             time: Optional time range, e.g., '2020' or '1990..2020'.
@@ -444,6 +444,9 @@ class Tools:
         """
         Fetch data and render a chart with custom Plotly configuration.
         Use this for custom data analysis that isn't satisfied by the official embed.
+
+        Args:
+            slug: EXACT slug returned by search_owid. Do NOT guess or hallucinate.
         """
         if fetch is None: return "Error: owid-catalog not installed."
         try: df = _cached_fetch_df(slug).copy()
@@ -465,7 +468,12 @@ class Tools:
         year_end: Optional[Any] = None,
         value_column: Optional[str] = None,
     ) -> Any:
-        """Fetch data for 2–8 countries and overlay them on one custom chart."""
+        """
+        Fetch data for 2–8 countries and overlay them on one custom chart.
+        
+        Args:
+            slug: EXACT slug returned by search_owid. Do NOT guess or hallucinate.
+        """
         if fetch is None: return "Error: owid-catalog not installed."
         if not countries: return "Provide at least 2 country names."
         try: df = _cached_fetch_df(slug).copy()
@@ -503,7 +511,7 @@ class Tools:
         For any visualisation use chart_owid_data.
 
         Args:
-            slug: Slug from search_owid.
+            slug: EXACT slug returned by search_owid. Do NOT guess or hallucinate.
             country: Optional country name.
             year_start: Optional start year/date.
             year_end: Optional end year/date.
