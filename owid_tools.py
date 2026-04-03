@@ -107,18 +107,73 @@ def _fuzzy_match_country(target: str, available: list) -> str:
     matches = difflib.get_close_matches(target, str_available, n=1, cutoff=0.5)
     return matches[0] if matches else target
 
+def _clean_series(
+    df: pd.DataFrame,
+    country_col,
+    year_col: str,
+    val_col: str,
+    country: Optional[str],
+    year_start: Optional[Any],
+    year_end: Optional[Any],
+) -> pd.DataFrame:
+    """
+    Filter, cast year to int, deduplicate (entity x year), sort.
+    NaN values are dropped — never filled with 0.
+    Returns a clean two-column frame [year_col, val_col].
+    """
+    # Country filter
+    if country and country_col:
+        available = df[country_col].dropna().unique().tolist()
+        matched_country = _fuzzy_match_country(country, available)
+        df = df[df[country_col].astype(str) == matched_country]
+
+    # Keep only the two columns we need to minimize memory and copy cost
+    df = df[[year_col, val_col]].copy()
+
+    is_date = pd.api.types.is_datetime64_any_dtype(df[year_col])
+    if not is_date:
+        first_valid = df[year_col].dropna().iloc[0] if not df[year_col].dropna().empty else None
+        if first_valid is not None and isinstance(first_valid, str) and len(first_valid) >= 10:
+            import re
+            is_date = bool(re.match(r'^\d{4}-\d{2}-\d{2}', str(first_valid)))
+
+    if is_date:
+        df[year_col] = pd.to_datetime(df[year_col], errors="coerce")
+    else:
+        df[year_col] = pd.to_numeric(df[year_col], errors="coerce")
+    df = df.dropna(subset=[year_col])
+    if not is_date:
+        df[year_col] = df[year_col].astype(int)
+
+    # Year/Date range filter
+    if year_start is not None:
+        start_val = pd.to_datetime(year_start) if is_date else float(year_start)
+        df = df[df[year_col] >= start_val]
+    if year_end is not None:
+        end_val = pd.to_datetime(year_end) if is_date else float(year_end)
+        df = df[df[year_col] <= end_val]
+
+    df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
+
+    # Deduplicate: multiple source rows per year -> take mean
+    df = df.groupby(year_col, as_index=False)[val_col].mean()
+
+    return df.sort_values(year_col).reset_index(drop=True)
+
 _SERIES_COLORS = [
-    "#60a5fa", "#f472b6", "#34d399", "#fb923c",
-    "#a78bfa", "#facc15", "#22d3ee", "#f87171",
+    "#2082a2", "#bf1b1b", "#588a0f", "#ca6f34",
+    "#0c6947", "#2774c6", "#009655", "#ab348a",
+    "#eb6400", "#17393d", "#660000", "#1b0655",
+    "#cc235c", "#253f77", "#0089be", "#af488f",
 ]
 _PLOTLY_CDN = "2.27.0"
-_BG    = "#0b0f14"
-_PANEL = "#111827"
-_TEXT  = "#e5e7eb"
-_MUTED = "#94a3b8"
-_BORDER = "#374151"
-_GRID  = "#1f2937"
-
+_BG    = "#ffffff"
+_PANEL = "#f9f9f9"
+_TEXT  = "#002147"
+_MUTED = "#426591"
+_BORDER = "#e0e0e0"
+_GRID  = "#dadada"
+_FONT  = "Lato, 'Helvetica Neue', Helvetica, Arial, sans-serif"
 def _validate_layout(config: dict) -> dict:
     allowed = {
         "xaxis", "yaxis", "legend", "annotations", "shapes",
@@ -134,15 +189,15 @@ def _validate_layout(config: dict) -> dict:
 
 def _build_html(title: str, traces: list, x_label: str, y_label: str, height: int = 460, extra_layout: Optional[dict] = None) -> str:
     layout = {
-        "title": {"text": title, "font": {"size": 15, "color": _TEXT}, "x": 0.04},
-        "paper_bgcolor": _PANEL, "plot_bgcolor": _BG,
-        "font": {"color": _TEXT, "family": "system-ui, -apple-system, sans-serif"},
-        "margin": {"l": 72, "r": 24, "t": 52, "b": 52},
-        "legend": {"bgcolor": "rgba(0,0,0,0)", "bordercolor": _BORDER, "borderwidth": 1, "font": {"color": _TEXT, "size": 12}},
-        "xaxis": {"gridcolor": _GRID, "linecolor": _BORDER, "tickcolor": _BORDER, "tickformat": "d", "title": {"text": x_label, "font": {"size": 12, "color": _MUTED}}, "tickfont": {"color": _MUTED}},
-        "yaxis": {"gridcolor": _GRID, "linecolor": _BORDER, "tickcolor": _BORDER, "title": {"text": y_label, "font": {"size": 12, "color": _MUTED}}, "tickfont": {"color": _MUTED}, "zeroline": False, "tickformat": "~s"},
+        "title": {"text": title, "font": {"size": 18, "color": _TEXT, "family": "'Playfair Display', Georgia, serif"}, "x": 0.04},
+        "paper_bgcolor": _BG, "plot_bgcolor": _BG,
+        "font": {"color": _TEXT, "family": _FONT},
+        "margin": {"l": 72, "r": 24, "t": 60, "b": 52},
+        "legend": {"bgcolor": "rgba(255,255,255,0.8)", "bordercolor": _BORDER, "borderwidth": 1, "font": {"color": _TEXT, "size": 12}},
+        "xaxis": {"gridcolor": _GRID, "linecolor": _TEXT, "tickcolor": _TEXT, "tickformat": "d", "title": {"text": x_label, "font": {"size": 13, "color": _MUTED}}, "tickfont": {"color": _MUTED}},
+        "yaxis": {"gridcolor": _GRID, "linecolor": _TEXT, "tickcolor": _TEXT, "title": {"text": y_label, "font": {"size": 13, "color": _MUTED}}, "tickfont": {"color": _MUTED}, "zeroline": True, "zerolinecolor": _GRID, "tickformat": "~s"},
         "hovermode": "x unified",
-        "hoverlabel": {"bgcolor": _PANEL, "bordercolor": _BORDER, "font": {"color": _TEXT, "size": 12}},
+        "hoverlabel": {"bgcolor": _BG, "bordercolor": _BORDER, "font": {"color": _TEXT, "size": 13, "family": _FONT}},
     }
     if extra_layout:
         layout.update(_validate_layout(extra_layout))
@@ -152,9 +207,10 @@ def _build_html(title: str, traces: list, x_label: str, y_label: str, height: in
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>{{html.escape(title)}}</title>
+<link href="https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,400;0,700;1,400&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{{box-sizing:border-box}}
-html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-family:system-ui,-apple-system,sans-serif;font-size:14px;overflow:visible;}}
+html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-family:{_FONT};font-size:14px;overflow:visible;}}
 #chart{{width:100%;height:{height}px;padding:12px 12px 4px}}
 </style>
 </head><body>
