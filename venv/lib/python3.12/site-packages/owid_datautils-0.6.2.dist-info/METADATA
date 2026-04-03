@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: owid-datautils
+Version: 0.6.2
+Summary: Data utils library by the Data Team at Our World in Data
+Author-email: Our World in Data <tech@ourworldindata.org>
+License-Expression: MIT
+License-File: LICENSE
+Keywords: data cleaning,data processing,data utils,our world in data
+Requires-Python: <4.0,>=3.10
+Requires-Dist: boto3>=1.38.23
+Requires-Dist: click>=8.1.7
+Requires-Dist: colorama>=0.4.4
+Requires-Dist: gdown>=4.5.2
+Requires-Dist: gsheets>=0.6.1
+Requires-Dist: pandas>=2.2.3
+Requires-Dist: py7zr>=0.22.0
+Requires-Dist: pyarrow>=18.0.0
+Requires-Dist: pydrive2>=1.15.0
+Requires-Dist: structlog>=21.5.0
+Requires-Dist: urllib3<2
