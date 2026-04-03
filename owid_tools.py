@@ -8,11 +8,14 @@ description: Search and fetch Our World in Data datasets, render results as
              auto-resize iframes, fullscreen support, and ASCII fallback.
 required_open_webui_version: 0.4.0
 
-tool_instructions: |
   ## Search & Data Access Workflow
   1. search_owid(query) -> returns slugs and brief descriptions.
   2. chart_owid_data(slug, ...) OR compare_owid_countries(...) OR get_owid_data(slug, ...) -> fetches data.
   3. Note: The catalog contains curated 'chart' objects. Use the 'slug' field from search results exactly.
+
+  ## Catalog Coverage (Data Domains)
+  - OWID catalog tracks 100+ topics including: demographics, economic development, education, energy, food security, health, inequality, poverty, sustainable development, war, and environment.
+  - Data is organized as indicators (variables) within datasets/tables with rich metadata support.
 
   ## Country/Entity Handling
   - Use 'search_owid' to see the 'available_entities' list before charting.
