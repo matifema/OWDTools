@@ -188,6 +188,13 @@ def test_custom_chart_validation():
     assert _validate_layout({"paper_bgcolor": "red"}) == {}
     assert _validate_layout({"annotations": [{"x": 1, "y": 2}]}) == {"annotations": [{"x": 1, "y": 2}]}
 
+    # Test custom_chart injection (Malicious payload test)
+    # Ensure it returns an empty layout or sanitizes, rather than executing scripts.
+    malicious = {"paper_bgcolor": "javascript:alert(1)", "title": {"text": "<script>alert(1)</script>"}}
+    validated = _validate_layout(malicious)
+    assert "paper_bgcolor" not in validated
+    assert validated["title"]["text"] == "<script>alert(1)</script>"
+
 
 def _validate_layout(config: dict) -> dict:
     """Only allow safe, non-styling layout properties."""
