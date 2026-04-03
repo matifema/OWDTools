@@ -6,11 +6,11 @@ This tool enables your AI assistant to search the OWID catalog, seamlessly embed
 
 ## Screenshots
 
-| Official Interactive Map | Custom Country Comparison |
+| OWID Official Maps | OWID Official Charts |
 | :---: | :---: |
-| <img src="chart_analysis.png" width="400"/> | <img src="interactive_map.png" width="400"/> |
-| **Internet Users Comparison** | **Life Expectancy Chart** |
-| <img src="data_table.png" width="400"/> | <img src="example_map.png" width="400"/> |
+| <img src="official_map.png" width="400"/> | <img src="official_bubble.png" width="400"/> |
+| **Custom Charts** | **More Custom Charts** |
+| <img src="custom_line.png" width="400"/> | <img src="custom_area.png" width="400"/> |
 
 ## Features
 
@@ -18,15 +18,7 @@ This tool enables your AI assistant to search the OWID catalog, seamlessly embed
 - **Official Interactive Embeds:** Automatically embeds the authentic, fully interactive OWID Grapher directly into the chat interface via responsive iframes. Enjoy maps, multi-country comparisons, and rich tooltips just as they appear on the official website.
 - **Raw Data Extraction:** When numerical analysis is required, the tool can extract specific columns, filter by country and year, and return raw data in clean Markdown tables for the LLM to analyze.
 - **Dark-Mode Native:** Designed to integrate flawlessly with Open WebUI's aesthetic.
-    
-## 💡 Example Prompts
 
-Try asking your LLM these questions to see the tool in action:
-
-1. **Interactive Mapping:** *"Show me a world map of life expectancy. Highlight Japan, the United States, and Nigeria."*
-2. **Custom Data Analysis:** *"Use your custom data analysis tool to plot the greenhouse gas emissions of France, Germany, and Italy from 1990 to 2020. I want to see a direct comparison line chart."*
-3. **Raw Data Extraction & Reasoning:** *"Fetch the raw data for renewable energy generation in the United Kingdom over the last 10 years. Based on the numbers, what is the year-over-year growth trend?"*
-4. **Correlation Analysis:** *"Get the raw data for GDP per capita and child mortality for India over the last 20 years and create a table comparing them to see if there's a visible correlation."*
 
 ## Installation
 

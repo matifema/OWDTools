@@ -261,11 +261,22 @@ def _make_trace(x: list, y: list, name: str, color: str, chart_type: str = "line
     ct = chart_type.lower().strip()
     if ct == "bar":
         return {"type": "bar", "name": name, "x": x, "y": y, "marker": {"color": color}}
-    return {
-        "type": "scatter", "mode": "lines+markers" if ct == "line" else "markers",
-        "name": name, "x": x, "y": y, "connectgaps": False,
+    
+    trace = {
+        "type": "scatter", "name": name, "x": x, "y": y, "connectgaps": False,
         "line": {"color": color, "width": 2}, "marker": {"size": 4, "color": color}
     }
+    
+    if ct == "area":
+        trace["mode"] = "lines"
+        trace["fill"] = "tozeroy"
+    elif ct == "scatter":
+        trace["mode"] = "markers"
+        trace["marker"]["size"] = 6
+    else:
+        trace["mode"] = "lines+markers"
+        
+    return trace
 
 def _detect_value_col(df: pd.DataFrame, structural: set, override: Optional[str]):
     if override and override in df.columns: return override
@@ -446,7 +457,7 @@ class Tools:
     async def custom_chart(
         self,
         slug: str,
-        country: Optional[str] = None,
+        countries: Optional[List[str]] = None,
         year_start: Optional[Any] = None,
         year_end: Optional[Any] = None,
         custom_js_config: Optional[dict] = None,
@@ -454,11 +465,8 @@ class Tools:
         chart_type: str = "line",
     ) -> Any:
         """
-        Fetch data and render a chart with custom Plotly configuration.
-        Use this for custom data analysis that isn't satisfied by the official embed.
-
-        Args:
-            slug: EXACT slug returned by search_owid. Do NOT guess or hallucinate.
+        Fetch data and render a custom Plotly chart.
+        Supports single country or a list of countries for comparison.
         """
         if fetch is None: return "Error: owid-catalog not installed."
         try: df = _cached_fetch_df(slug).copy()
@@ -467,47 +475,24 @@ class Tools:
         structural = {str(country_col).lower() if country_col else "", str(year_col).lower(), "code", "entity_code", "country_code"}
         val_col = _detect_value_col(df, structural, value_column)
         if val_col is None: return f"Could not detect a numeric value column in '{slug}'."
-        clean = _clean_series(df, country_col, year_col, val_col, country, year_start, year_end)
-        if clean.empty: return "No data found."
-        trace = _make_trace(x=clean[year_col].tolist(), y=[float(v) for v in clean[val_col].tolist()], name=country or "Data", color=_SERIES_COLORS[0], chart_type=chart_type)
-        return self._render(f"{slug} custom analysis", [trace], "Year", str(val_col), extra_layout=custom_js_config)
-
-    async def compare_owid_countries(
-        self,
-        slug: str,
-        countries: List[str],
-        year_start: Optional[Any] = None,
-        year_end: Optional[Any] = None,
-        value_column: Optional[str] = None,
-    ) -> Any:
-        """
-        Fetch data for 2–8 countries and overlay them on one custom chart.
         
-        Args:
-            slug: EXACT slug returned by search_owid. Do NOT guess or hallucinate.
-        """
-        if fetch is None: return "Error: owid-catalog not installed."
-        if not countries: return "Provide at least 2 country names."
-        try: df = _cached_fetch_df(slug).copy()
-        except Exception as e: return f"Error fetching '{slug}': {e}"
-        country_col, year_col = _detect_cols(df)
-        structural = {str(country_col).lower() if country_col else "", str(year_col).lower(), "code", "entity_code", "country_code"}
-        val_col = _detect_value_col(df, structural, value_column)
-        if val_col is None: return "Could not detect a numeric value column."
         traces, missing = [], []
-        for idx, country in enumerate(countries[:8]):
+        target_countries = countries if countries else [None]
+        for idx, country in enumerate(target_countries[:8]):
             clean = _clean_series(df, country_col, year_col, val_col, country, year_start, year_end)
             if clean.empty:
-                missing.append(country)
+                if country: missing.append(country)
                 continue
-            traces.append(_make_trace(x=clean[year_col].tolist(), y=[float(v) for v in clean[val_col].tolist()], name=country, color=_SERIES_COLORS[idx % len(_SERIES_COLORS)], chart_type="line"))
-        if not traces: return f"No data found for any of: {countries}."
-        chart_title = f"{slug.replace('-', ' ').title()} — Comparison"
+            color = _SERIES_COLORS[idx % len(_SERIES_COLORS)] if len(target_countries) > 1 else _SERIES_COLORS[0]
+            trace = _make_trace(x=clean[year_col].tolist(), y=[float(v) for v in clean[val_col].tolist()], name=country or "Data", color=color, chart_type=chart_type)
+            traces.append(trace)
+        if not traces: return f"No data found for: {countries or 'all'}."
+        chart_title = f"{slug.replace('-', ' ').title()} Analysis"
+        if len(target_countries) > 1: chart_title += " — Comparison"
         y_label = str(val_col).replace("_", " ").title()
-        result = self._render(chart_title, traces, "Year", y_label)
-        if missing and isinstance(result, str): result += f"\\n\\n> Warning: no data for {', '.join(missing)}"
+        result = self._render(chart_title, traces, "Year", y_label, extra_layout=custom_js_config)
+        if missing and isinstance(result, str): result += f"\n\n> Warning: no data for {', '.join(missing)}"
         return result
-
     async def get_owid_data(
         self,
         slug: str,
