@@ -6,9 +6,9 @@ This tool enables your AI assistant to search the OWID catalog, seamlessly embed
 
 ## Screenshots
 
-![Chart Analysis](chart_analysis.png)
-![Interactive Map](interactive_map.png)
-![Data Table](data_table.png)
+| Official Interactive Map | Custom Country Comparison | Internet Users Comparison | Life Expectancy Chart |
+| :---: | :---: | :---: | :---: |
+| ![Official Map](chart_analysis.png) | ![Comparison Chart](interactive_map.png) | ![Internet Trends](data_table.png) | ![Life Expectancy](example_map.png) |
 
 ## Features
 
