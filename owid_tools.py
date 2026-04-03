@@ -215,6 +215,8 @@ class Tools:
     async def chart_owid_data(
         self,
         slug: str,
+        tab: Optional[str] = None,
+        countries: Optional[List[str]] = None,
         **kwargs
     ) -> Any:
         """
@@ -225,8 +227,22 @@ class Tools:
 
         Args:
             slug: Slug from search_owid, e.g. 'life-expectancy'.
+            tab: Optional chart view ('chart', 'map', or 'table').
+            countries: Optional list of specific country names to pre-filter in the chart.
         """
         url = f"https://ourworldindata.org/grapher/{slug}"
+        
+        query_params = []
+        if tab:
+            query_params.append(f"tab={tab}")
+        if countries:
+            import urllib.parse
+            country_str = "~".join(countries)
+            query_params.append(f"country={urllib.parse.quote(country_str)}")
+            
+        if query_params:
+            url += "?" + "&".join(query_params)
+            
         height = self.valves.chart_height_px + 140  # Official grapher needs more space for controls
         html_content = f"""
         <iframe src="{url}" loading="lazy" style="width: 100%; height: {height}px; border: 0px none; border-radius: 4px;"></iframe>
