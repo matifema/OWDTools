@@ -3,14 +3,13 @@ title: OWID Data Tools
 author: Marco
 version: 2.2.0
 license: MIT
-description: Search and fetch Our World in Data datasets, render results as
-             interactive Plotly charts or raw tables. Dark-mode HTML with
-             auto-resize iframes, fullscreen support, and ASCII fallback.
+description: Search and fetch Our World in Data datasets, embed official
+             interactive charts or return raw tables.
 required_open_webui_version: 0.4.0
 
   ## Search & Data Access Workflow
   1. search_owid(query) -> returns slugs and brief descriptions.
-  2. chart_owid_data(slug, ...) OR compare_owid_countries(...) OR get_owid_data(slug, ...) -> fetches data.
+  2. chart_owid_data(slug, ...) OR get_owid_data(slug, ...) -> fetches data.
   3. Note: The catalog contains curated 'chart' objects. Use the 'slug' field from search results exactly.
 
   ## Catalog Coverage (Data Domains)
@@ -116,8 +115,7 @@ class Tools:
 
     Workflow:
       1. search_owid   → discover slugs + valid country names
-      2. embed_owid_grapher → embed official OWID interactive chart (Recommended)
-         chart_owid_data or compare_owid_countries → generate custom Plotly charts
+      2. chart_owid_data → embed official OWID interactive chart (Recommended)
          get_owid_data → raw table (only when numbers are explicitly needed)
     """
 
@@ -125,15 +123,15 @@ class Tools:
         self.valves = self.Valves()
 
     class Valves(BaseModel):
-        allow_external_cdn: bool = Field(
+        allow_iframe_embedding: bool = Field(
             True,
-            description="Load Plotly from CDN. If false, all charts fall back to ASCII.",
+            description="Allow embedding OWID iframes. If false, returns direct links.",
         )
         chart_height_px: int = Field(460, description="Chart height in pixels.")
         max_table_rows: int  = Field(20,  description="Max rows from get_owid_data.")
         max_search_results: int = Field(5, description="Max results from search_owid.")
     def _can_embed(self) -> bool:
-        return self.valves.allow_external_cdn and HTMLResponse is not None
+        return self.valves.allow_iframe_embedding and HTMLResponse is not None
     # ─────────────────────────────────────────────────────────────────────────
 
     async def search_owid(
