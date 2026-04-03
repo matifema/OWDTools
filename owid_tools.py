@@ -9,38 +9,19 @@ description: Search and fetch Our World in Data datasets, render results as
 required_open_webui_version: 0.4.0
 
 tool_instructions: |
-  ## Workflow — always follow this order
+  ## Search & Data Access Workflow
+  1. search_owid(query) -> returns slugs and brief descriptions.
+  2. chart_owid_data(slug, ...) OR compare_owid_countries(...) OR get_owid_data(slug, ...) -> fetches data.
+  3. Note: The catalog contains curated 'chart' objects. Use the 'slug' field from search results exactly.
 
-  1. Call search_owid(query) to discover chart slugs and valid country names.
-  2. Call chart_owid_data(slug, ...) to visualise a single country/entity over time.
-     OR call compare_owid_countries(slug, countries, ...) to overlay 2-8 countries.
-     OR call get_owid_data(slug, ...) if you need the raw numbers, not a chart.
+  ## Country/Entity Handling
+  - Use 'search_owid' to see the 'available_entities' list before charting.
+  - Match names exactly (e.g., 'United States' not 'USA'). Aliases are handled internally for common names.
+  - If an entity is not in 'available_entities', try another from the list provided.
 
-  ## search_owid
-  - Use short topic queries: "life expectancy", "CO2 emissions", "child mortality"
-  - Returns slug + description + sample country names (use these exactly)
-
-  ## chart_owid_data
-  - slug: copy exactly from search results
-  - country: must match a name from available_countries (e.g. "Italy", "United States")
-  - Omit country to auto-select "World" or the first available entity
-  - chart_type: "line" (default) | "bar" | "scatter"
-
-  ## compare_owid_countries
-  - countries: list of 2-8 exact country names from search results
-  - Renders all on one chart as overlapping coloured lines
-
-  ## get_owid_data
-  - Use only when the user explicitly needs a table or raw numbers
-  - Returns up to 20 rows as a Markdown table
-  - If the dataset has many columns, omit the `columns` parameter on your first call. The tool will return a list of available columns instead of data. Use this list to pick your columns, then call it again with the `columns` parameter specified.
-  ## Country name pitfalls
-  - "United States" not "USA"
-  - "United Kingdom" not "UK"
-  - "Czechia" not "Czech Republic"
-  - Always copy names exactly as shown in search results
+  ## get_owid_data metadata discovery
+  - When you first call get_owid_data(slug), if it lists many columns, pick the ones you need based on the column list returned, then call it again with the `columns` parameter.
 """
-
 from __future__ import annotations
 
 import html
