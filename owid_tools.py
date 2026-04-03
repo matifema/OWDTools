@@ -107,6 +107,114 @@ def _fuzzy_match_country(target: str, available: list) -> str:
     matches = difflib.get_close_matches(target, str_available, n=1, cutoff=0.5)
     return matches[0] if matches else target
 
+_SERIES_COLORS = [
+    "#60a5fa", "#f472b6", "#34d399", "#fb923c",
+    "#a78bfa", "#facc15", "#22d3ee", "#f87171",
+]
+_PLOTLY_CDN = "2.27.0"
+_BG    = "#0b0f14"
+_PANEL = "#111827"
+_TEXT  = "#e5e7eb"
+_MUTED = "#94a3b8"
+_BORDER = "#374151"
+_GRID  = "#1f2937"
+
+def _validate_layout(config: dict) -> dict:
+    allowed = {
+        "xaxis", "yaxis", "legend", "annotations", "shapes",
+        "margin", "title", "hovermode", "hoverlabel",
+    }
+    def _is_safe(k, v):
+        if k not in allowed: return False
+        if isinstance(v, dict):
+            for nk, nv in v.items():
+                if not _is_safe(nk, nv): return False
+        return True
+    return {k: v for k, v in config.items() if _is_safe(k, v)}
+
+def _build_html(title: str, traces: list, x_label: str, y_label: str, height: int = 460, extra_layout: Optional[dict] = None) -> str:
+    layout = {
+        "title": {"text": title, "font": {"size": 15, "color": _TEXT}, "x": 0.04},
+        "paper_bgcolor": _PANEL, "plot_bgcolor": _BG,
+        "font": {"color": _TEXT, "family": "system-ui, -apple-system, sans-serif"},
+        "margin": {"l": 72, "r": 24, "t": 52, "b": 52},
+        "legend": {"bgcolor": "rgba(0,0,0,0)", "bordercolor": _BORDER, "borderwidth": 1, "font": {"color": _TEXT, "size": 12}},
+        "xaxis": {"gridcolor": _GRID, "linecolor": _BORDER, "tickcolor": _BORDER, "tickformat": "d", "title": {"text": x_label, "font": {"size": 12, "color": _MUTED}}, "tickfont": {"color": _MUTED}},
+        "yaxis": {"gridcolor": _GRID, "linecolor": _BORDER, "tickcolor": _BORDER, "title": {"text": y_label, "font": {"size": 12, "color": _MUTED}}, "tickfont": {"color": _MUTED}, "zeroline": False, "tickformat": "~s"},
+        "hovermode": "x unified",
+        "hoverlabel": {"bgcolor": _PANEL, "bordercolor": _BORDER, "font": {"color": _TEXT, "size": 12}},
+    }
+    if extra_layout:
+        layout.update(_validate_layout(extra_layout))
+
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{{html.escape(title)}}</title>
+<style>
+*,*::before,*::after{{box-sizing:border-box}}
+html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-family:system-ui,-apple-system,sans-serif;font-size:14px;overflow:visible;}}
+#chart{{width:100%;height:{height}px;padding:12px 12px 4px}}
+</style>
+</head><body>
+<div id="chart"></div>
+<script src="https://cdn.plot.ly/plotly-{_PLOTLY_CDN}.min.js"></script>
+<script>
+(function(){{
+  var traces = {{json.dumps(traces)}};
+  var layout = {{json.dumps(layout)}};
+  var config = {{responsive: true, displayModeBar: true, displaylogo: false}};
+  Plotly.newPlot("chart", traces, layout, config);
+  function syncHeight(){{
+    var h = document.documentElement.scrollHeight;
+    try{{ if(window.frameElement) window.frameElement.style.height = h + "px"; }}catch(e){{}}
+  }}
+  window.addEventListener("load", syncHeight);
+  if(typeof ResizeObserver !== "undefined") new ResizeObserver(syncHeight).observe(document.body);
+  [300, 900].forEach(function(t){{ setTimeout(syncHeight, t); }});
+}})();
+</script></body></html>"""
+
+def _ascii_fallback(traces: list, title: str) -> str:
+    h = 10
+    lines = [f"### {title}", ""]
+    for t in traces:
+        y = [v for v in t.get("y", []) if v is not None]
+        x = t.get("x", [])
+        name = t.get("name", "")
+        if not y: continue
+        max_y, min_y = max(y), min(y)
+        rng = max_y - min_y or 1.0
+        grid = [[" "] * (len(y) * 2) for _ in range(h)]
+        for i, v in enumerate(y):
+            r = int((max_y - v) / rng * (h - 1))
+            r = max(0, min(h - 1, r))
+            grid[r][i * 2] = "●"
+        if name: lines.append(f"**{name}**")
+        lines.append("```text")
+        for i, row in enumerate(grid):
+            thr = max_y - (rng * i / (h - 1)) if h > 1 else max_y
+            lines.append(f"{thr:9.2f} |{''.join(row)}")
+        lines.append("         +" + "--" * len(y))
+        lines.append("           " + "".join(f"{str(x[i])[:4]:4} " for i in range(min(len(x), 12))))
+        lines.append("```\\n")
+    return "\\n".join(lines)
+
+def _make_trace(x: list, y: list, name: str, color: str, chart_type: str = "line") -> dict:
+    ct = chart_type.lower().strip()
+    if ct == "bar":
+        return {"type": "bar", "name": name, "x": x, "y": y, "marker": {"color": color}}
+    return {
+        "type": "scatter", "mode": "lines+markers" if ct == "line" else "markers",
+        "name": name, "x": x, "y": y, "connectgaps": False,
+        "line": {"color": color, "width": 2}, "marker": {"size": 4, "color": color}
+    }
+
+def _detect_value_col(df: pd.DataFrame, structural: set, override: Optional[str]):
+    if override and override in df.columns: return override
+    return next((c for c in df.columns if str(c).lower() not in structural and pd.api.types.is_numeric_dtype(df[c])), None)
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Tools:
@@ -116,6 +224,7 @@ class Tools:
     Workflow:
       1. search_owid   → discover slugs + valid country names
       2. chart_owid_data → embed official OWID interactive chart (Recommended)
+         custom_chart or compare_owid_countries → generate custom Plotly analysis charts
          get_owid_data → raw table (only when numbers are explicitly needed)
     """
 
@@ -132,6 +241,12 @@ class Tools:
         max_search_results: int = Field(5, description="Max results from search_owid.")
     def _can_embed(self) -> bool:
         return self.valves.allow_iframe_embedding and HTMLResponse is not None
+    def _render(self, title: str, traces: list, x_label: str, y_label: str, extra_layout: Optional[dict] = None) -> Any:
+        page = _build_html(title, traces, x_label, y_label, self.valves.chart_height_px, extra_layout=extra_layout)
+        if self._can_embed():
+            return HTMLResponse(content=page, headers={"Content-Disposition": "inline"})  # type: ignore
+        return _ascii_fallback(traces, title)
+
     # ─────────────────────────────────────────────────────────────────────────
 
     async def search_owid(
@@ -259,6 +374,63 @@ class Tools:
         if self._can_embed():
             return HTMLResponse(content=html_content, headers={"Content-Disposition": "inline"})  # type: ignore
         return f"External embedding disabled (CDN off). View official chart here: {url}"
+
+    async def custom_chart(
+        self,
+        slug: str,
+        country: Optional[str] = None,
+        year_start: Optional[Any] = None,
+        year_end: Optional[Any] = None,
+        custom_js_config: Optional[dict] = None,
+        value_column: Optional[str] = None,
+        chart_type: str = "line",
+    ) -> Any:
+        """
+        Fetch data and render a chart with custom Plotly configuration.
+        Use this for custom data analysis that isn't satisfied by the official embed.
+        """
+        if fetch is None: return "Error: owid-catalog not installed."
+        try: df = _cached_fetch_df(slug).copy()
+        except Exception as e: return f"Error fetching '{slug}': {e}"
+        country_col, year_col = _detect_cols(df)
+        structural = {str(country_col).lower() if country_col else "", str(year_col).lower(), "code", "entity_code", "country_code"}
+        val_col = _detect_value_col(df, structural, value_column)
+        if val_col is None: return f"Could not detect a numeric value column in '{slug}'."
+        clean = _clean_series(df, country_col, year_col, val_col, country, year_start, year_end)
+        if clean.empty: return "No data found."
+        trace = _make_trace(x=clean[year_col].tolist(), y=[float(v) for v in clean[val_col].tolist()], name=country or "Data", color=_SERIES_COLORS[0], chart_type=chart_type)
+        return self._render(f"{slug} custom analysis", [trace], "Year", str(val_col), extra_layout=custom_js_config)
+
+    async def compare_owid_countries(
+        self,
+        slug: str,
+        countries: List[str],
+        year_start: Optional[Any] = None,
+        year_end: Optional[Any] = None,
+        value_column: Optional[str] = None,
+    ) -> Any:
+        """Fetch data for 2–8 countries and overlay them on one custom chart."""
+        if fetch is None: return "Error: owid-catalog not installed."
+        if not countries: return "Provide at least 2 country names."
+        try: df = _cached_fetch_df(slug).copy()
+        except Exception as e: return f"Error fetching '{slug}': {e}"
+        country_col, year_col = _detect_cols(df)
+        structural = {str(country_col).lower() if country_col else "", str(year_col).lower(), "code", "entity_code", "country_code"}
+        val_col = _detect_value_col(df, structural, value_column)
+        if val_col is None: return "Could not detect a numeric value column."
+        traces, missing = [], []
+        for idx, country in enumerate(countries[:8]):
+            clean = _clean_series(df, country_col, year_col, val_col, country, year_start, year_end)
+            if clean.empty:
+                missing.append(country)
+                continue
+            traces.append(_make_trace(x=clean[year_col].tolist(), y=[float(v) for v in clean[val_col].tolist()], name=country, color=_SERIES_COLORS[idx % len(_SERIES_COLORS)], chart_type="line"))
+        if not traces: return f"No data found for any of: {countries}."
+        chart_title = f"{slug.replace('-', ' ').title()} — Comparison"
+        y_label = str(val_col).replace("_", " ").title()
+        result = self._render(chart_title, traces, "Year", y_label)
+        if missing and isinstance(result, str): result += f"\\n\\n> Warning: no data for {', '.join(missing)}"
+        return result
 
     async def get_owid_data(
         self,
