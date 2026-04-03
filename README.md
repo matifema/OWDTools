@@ -8,7 +8,7 @@ This tool enables your AI assistant to search the OWID catalog, seamlessly embed
 
 | Official Interactive Map | Custom Country Comparison | Internet Users Comparison | Life Expectancy Chart |
 | :---: | :---: | :---: | :---: |
-| ![Official Map](chart_analysis.png) | ![Comparison Chart](interactive_map.png) | ![Internet Trends](data_table.png) | ![Life Expectancy](example_map.png) |
+| <img src="chart_analysis.png" width="250"/> | <img src="interactive_map.png" width="250"/> | <img src="data_table.png" width="250"/> | <img src="example_map.png" width="250"/> |
 
 ## Features
 
