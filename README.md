@@ -6,8 +6,9 @@ This tool enables your AI assistant to search the OWID catalog, seamlessly embed
 
 ## Screenshots
 
-![Example Chart](example_chart.png)
-![Example Map](example_map.png)
+![Chart Analysis](chart_analysis.png)
+![Interactive Map](interactive_map.png)
+![Data Table](data_table.png)
 
 ## Features
 
@@ -15,6 +16,15 @@ This tool enables your AI assistant to search the OWID catalog, seamlessly embed
 - **Official Interactive Embeds:** Automatically embeds the authentic, fully interactive OWID Grapher directly into the chat interface via responsive iframes. Enjoy maps, multi-country comparisons, and rich tooltips just as they appear on the official website.
 - **Raw Data Extraction:** When numerical analysis is required, the tool can extract specific columns, filter by country and year, and return raw data in clean Markdown tables for the LLM to analyze.
 - **Dark-Mode Native:** Designed to integrate flawlessly with Open WebUI's aesthetic.
+    
+## 💡 Example Prompts
+
+Try asking your LLM these questions to see the tool in action:
+
+1. **Interactive Mapping:** *"Show me a world map of life expectancy. Highlight Japan, the United States, and Nigeria."*
+2. **Custom Data Analysis:** *"Use your custom data analysis tool to plot the greenhouse gas emissions of France, Germany, and Italy from 1990 to 2020. I want to see a direct comparison line chart."*
+3. **Raw Data Extraction & Reasoning:** *"Fetch the raw data for renewable energy generation in the United Kingdom over the last 10 years. Based on the numbers, what is the year-over-year growth trend?"*
+4. **Correlation Analysis:** *"Get the raw data for GDP per capita and child mortality for India over the last 20 years and create a table comparing them to see if there's a visible correlation."*
 
 ## Installation
 
