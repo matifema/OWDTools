@@ -399,17 +399,43 @@ class Tools:
         """
         if search is None:
             return "Error: owid-catalog not installed. Run: pip install owid-catalog"
-        try:
-            results = search(query)
-        except Exception as e:
-            return f"Search error: {e}"
+
+        import asyncio
+        
+        search_terms = [query]
+        if "," in query:
+            search_terms.extend([q.strip() for q in query.split(',') if q.strip()])
+        else:
+            words = [w for w in query.split() if len(w) > 3]
+            if len(words) > 1:
+                search_terms.extend(words)
+
+        seen_terms = set()
+        unique_terms = [t for t in search_terms if t.lower() not in seen_terms and not seen_terms.add(t.lower())]
+
+        async def _run_search(q: str):
+            try:
+                return await asyncio.to_thread(search, q)
+            except Exception:
+                return []
+
+        search_tasks = [_run_search(q) for q in unique_terms[:5]] # Max 5 concurrent searches
+        results_lists = await asyncio.gather(*search_tasks)
+
+        seen_slugs = set()
+        results = []
+        for res_list in results_lists:
+            for res in res_list:
+                slug = getattr(res, "slug", getattr(res, "path", "unknown"))
+                if slug not in seen_slugs:
+                    seen_slugs.add(slug)
+                    results.append(res)
 
         if len(results) == 0:
             return (
                 f"No charts found for '{query}'. "
                 "Try broader terms, e.g. 'emissions' instead of 'carbon footprint by sector'."
             )
-
         n = min(len(results), self.valves.max_search_results)
         lines = [f"Found {n} chart(s) for '{query}':\n"]
 
