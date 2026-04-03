@@ -32,8 +32,8 @@ tool_instructions: |
 
   ## get_owid_data
   - Use only when the user explicitly needs a table or raw numbers
-  - Returns up to 20 rows as plain text
-
+  - Returns up to 20 rows as a Markdown table
+  - If the dataset has many columns, omit the `columns` parameter on your first call. The tool will return a list of available columns instead of data. Use this list to pick your columns, then call it again with the `columns` parameter specified.
   ## Country name pitfalls
   - "United States" not "USA"
   - "United Kingdom" not "UK"
@@ -612,12 +612,20 @@ class Tools:
         country: Optional[str] = None,
         year_start: Optional[Any] = None,
         year_end: Optional[Any] = None,
+        columns: Optional[List[str]] = None,
     ) -> str:
         """
         Fetch raw OWID data as a plain-text table.
 
         Use only when the user explicitly needs numbers.
         For any visualisation use chart_owid_data or compare_owid_countries.
+
+        Args:
+            slug: Slug from search_owid.
+            country: Optional country name.
+            year_start: Optional start year/date.
+            year_end: Optional end year/date.
+            columns: Specific columns to include. Leave blank to discover available columns if the dataset is large.
         """
         if fetch is None:
             return "Error: owid-catalog not installed."
@@ -658,9 +666,42 @@ class Tools:
                 f"Sample valid names: {_country_sample(_cached_fetch_df(slug), country_col)}"
             )
 
+        if columns:
+            missing_cols = [c for c in columns if c not in df.columns]
+            if missing_cols:
+                return f"Error: Columns not found: {missing_cols}\nAvailable columns: {list(df.columns)}"
+            cols_to_keep = list(columns)
+            if country_col and country_col not in cols_to_keep:
+                cols_to_keep.insert(0, country_col)
+            if year_col and year_col not in cols_to_keep:
+                cols_to_keep.insert(1, year_col)
+            # Remove duplicates preserving order
+            seen = set()
+            cols_to_keep = [x for x in cols_to_keep if not (x in seen or seen.add(x))]
+            df = df[cols_to_keep]
+        elif len(df.columns) > 5:
+            return (
+                f"Dataset has {len(df.columns)} columns.\n"
+                f"Available columns: {list(df.columns)}\n\n"
+                f"Please specify a list of 'columns' to view (e.g. ['total_cases', 'new_deaths'])."
+            )
+
         cap = self.valves.max_table_rows
+        df_subset = df.head(cap)
+
+        # Build simple markdown table
+        headers = list(df_subset.columns)
+        header_row = "| " + " | ".join(headers) + " |"
+        separator_row = "| " + " | ".join(["---"] * len(headers)) + " |"
+        
+        data_rows = []
+        for _, row in df_subset.iterrows():
+            data_rows.append("| " + " | ".join(str(x) for x in row.values) + " |")
+        
+        md_table = "\n".join([header_row, separator_row] + data_rows)
+
         return (
             f"Data: {slug} | {country or 'all entities'} | "
             f"showing {min(len(df), cap)} of {len(df)} rows\n\n"
-            + df.head(cap).to_string(index=False)
+            f"{md_table}"
         )
