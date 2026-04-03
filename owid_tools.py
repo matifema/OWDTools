@@ -217,6 +217,7 @@ class Tools:
         slug: str,
         tab: Optional[str] = None,
         countries: Optional[List[str]] = None,
+        time: Optional[str] = None,
         **kwargs
     ) -> Any:
         """
@@ -229,6 +230,7 @@ class Tools:
             slug: Slug from search_owid, e.g. 'life-expectancy'.
             tab: Optional chart view ('chart', 'map', or 'table').
             countries: Optional list of specific country names to pre-filter in the chart.
+            time: Optional time range, e.g., '2020' or '1990..2020'.
         """
         url = f"https://ourworldindata.org/grapher/{slug}"
         
@@ -239,6 +241,8 @@ class Tools:
             import urllib.parse
             country_str = "~".join(countries)
             query_params.append(f"country={urllib.parse.quote(country_str)}")
+        if time:
+            query_params.append(f"time={time}")
             
         if query_params:
             url += "?" + "&".join(query_params)
