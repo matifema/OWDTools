@@ -420,6 +420,10 @@ class Tools:
             import urllib.parse
             country_str = "~".join(countries)
             query_params.append(f"country={urllib.parse.quote(country_str)}")
+            if tab == "map":
+                # The map view specifically uses mapSelect to highlight countries
+                map_select_str = "~" + "~".join(countries)
+                query_params.append(f"mapSelect={urllib.parse.quote(map_select_str)}")
         if time:
             query_params.append(f"time={time}")
             
