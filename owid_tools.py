@@ -73,6 +73,12 @@ def _cached_fetch_df(slug: str) -> pd.DataFrame:
     table = fetch(slug)
     return pd.DataFrame(table).reset_index()
 
+@functools.lru_cache(maxsize=32)
+def _cached_search(q: str):
+    """Cache OWID catalog searches."""
+    if search is None:
+        return []
+    return search(q)
 def _detect_cols(df: pd.DataFrame):
     """Return (country_col, year_col) by fuzzy name matching."""
     lc = {str(c).lower(): c for c in df.columns}
@@ -119,9 +125,16 @@ def _clean_series(
         matched_country = _fuzzy_match_country(country, available)
         df = df[df[country_col].astype(str) == matched_country]
 
-    df = df.copy()
+    # Keep only the two columns we need to minimize memory and copy cost
+    df = df[[year_col, val_col]].copy()
 
-    is_date = df[year_col].dtype.kind == 'M' or df[year_col].astype(str).str.match(r'^\d{4}-\d{2}-\d{2}').any()
+    is_date = pd.api.types.is_datetime64_any_dtype(df[year_col])
+    if not is_date:
+        first_valid = df[year_col].dropna().iloc[0] if not df[year_col].dropna().empty else None
+        if first_valid is not None and isinstance(first_valid, str) and len(first_valid) >= 10:
+            import re
+            is_date = bool(re.match(r'^\d{4}-\d{2}-\d{2}', str(first_valid)))
+
     if is_date:
         df[year_col] = pd.to_datetime(df[year_col], errors="coerce")
     else:
@@ -138,10 +151,7 @@ def _clean_series(
         end_val = pd.to_datetime(year_end) if is_date else float(year_end)
         df = df[df[year_col] <= end_val]
 
-    # Keep only the two columns we need; drop NaN values (never fill with 0)
-    df = df[[year_col, val_col]].copy()
     df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
-    df = df.dropna(subset=[val_col])
 
     # Deduplicate: multiple source rows per year -> take mean
     df = df.groupby(year_col, as_index=False)[val_col].mean()
@@ -255,47 +265,6 @@ def _build_html(title: str, traces: list, x_label: str, y_label: str, height: in
     }
     if extra_layout:
         layout.update(_validate_layout(extra_layout))
-    """Render a self-contained dark-mode Plotly HTML page."""
-    layout = {
-        "title": {
-            "text": title,
-            "font": {"size": 15, "color": _TEXT},
-            "x": 0.04,
-        },
-        "paper_bgcolor": _PANEL,
-        "plot_bgcolor":  _BG,
-        "font":   {"color": _TEXT, "family": "system-ui, -apple-system, sans-serif"},
-        "margin": {"l": 72, "r": 24, "t": 52, "b": 52},
-        "legend": {
-            "bgcolor": "rgba(0,0,0,0)",
-            "bordercolor": _BORDER,
-            "borderwidth": 1,
-            "font": {"color": _TEXT, "size": 12},
-        },
-        "xaxis": {
-            "gridcolor": _GRID,
-            "linecolor": _BORDER,
-            "tickcolor": _BORDER,
-            "tickformat": "d",        # integers only, no "2,020.5"
-            "title": {"text": x_label, "font": {"size": 12, "color": _MUTED}},
-            "tickfont": {"color": _MUTED},
-        },
-        "yaxis": {
-            "gridcolor": _GRID,
-            "linecolor": _BORDER,
-            "tickcolor": _BORDER,
-            "title": {"text": y_label, "font": {"size": 12, "color": _MUTED}},
-            "tickfont": {"color": _MUTED},
-            "zeroline": False,
-            "tickformat": "~s",       # e.g. 10B, 500M, 2k
-        },
-        "hovermode": "x unified",
-        "hoverlabel": {
-            "bgcolor": _PANEL,
-            "bordercolor": _BORDER,
-            "font": {"color": _TEXT, "size": 12},
-        },
-    }
 
     return f"""<!doctype html>
 <html lang="en"><head>
@@ -486,7 +455,7 @@ class Tools:
 
         async def _run_search(q: str):
             try:
-                return await asyncio.to_thread(search, q)
+                return await asyncio.to_thread(_cached_search, q)
             except Exception:
                 return []
 
@@ -680,7 +649,7 @@ class Tools:
 
         for idx, country in enumerate(countries[:8]):
             clean = _clean_series(
-                df.copy(), country_col, year_col, val_col,
+                df, country_col, year_col, val_col,
                 country, year_start, year_end,
             )
             if clean.empty:
@@ -749,7 +718,12 @@ class Tools:
 
         if year_col:
             df = df.copy()
-            is_date = df[year_col].dtype.kind == 'M' or df[year_col].astype(str).str.match(r'^\d{4}-\d{2}-\d{2}').any()
+            is_date = pd.api.types.is_datetime64_any_dtype(df[year_col])
+            if not is_date:
+                first_valid = df[year_col].dropna().iloc[0] if not df[year_col].dropna().empty else None
+                if first_valid is not None and isinstance(first_valid, str) and len(first_valid) >= 10:
+                    import re
+                    is_date = bool(re.match(r'^\d{4}-\d{2}-\d{2}', str(first_valid)))
             if is_date:
                 df[year_col] = pd.to_datetime(df[year_col], errors="coerce")
             else:
@@ -805,51 +779,6 @@ class Tools:
         
         md_table = "\n".join([header_row, separator_row] + data_rows)
         
-        return (
-            f"Data: {slug} | {country or 'all entities'} | "
-            f"showing {min(len(df), cap)} of {len(df)} rows\n\n"
-            f"{md_table}"
-        )
-        if df.empty:
-            return (
-                f"No data for '{country}' in '{slug}'.\n"
-                f"Sample valid names: {_country_sample(_cached_fetch_df(slug), country_col)}"
-            )
-
-        if columns:
-            missing_cols = [c for c in columns if c not in df.columns]
-            if missing_cols:
-                return f"Error: Columns not found: {missing_cols}\nAvailable columns: {list(df.columns)}"
-            cols_to_keep = list(columns)
-            if country_col and country_col not in cols_to_keep:
-                cols_to_keep.insert(0, country_col)
-            if year_col and year_col not in cols_to_keep:
-                cols_to_keep.insert(1, year_col)
-            # Remove duplicates preserving order
-            seen = set()
-            cols_to_keep = [x for x in cols_to_keep if not (x in seen or seen.add(x))]
-            df = df[cols_to_keep]
-        elif len(df.columns) > 5:
-            return (
-                f"Dataset has {len(df.columns)} columns.\n"
-                f"Available columns: {list(df.columns)}\n\n"
-                f"Please specify a list of 'columns' to view (e.g. ['total_cases', 'new_deaths'])."
-            )
-
-        cap = self.valves.max_table_rows
-        df_subset = df.head(cap)
-
-        # Build simple markdown table
-        headers = list(df_subset.columns)
-        header_row = "| " + " | ".join(headers) + " |"
-        separator_row = "| " + " | ".join(["---"] * len(headers)) + " |"
-        
-        data_rows = []
-        for _, row in df_subset.iterrows():
-            data_rows.append("| " + " | ".join(str(x) for x in row.values) + " |")
-        
-        md_table = "\n".join([header_row, separator_row] + data_rows)
-
         return (
             f"Data: {slug} | {country or 'all entities'} | "
             f"showing {min(len(df), cap)} of {len(df)} rows\n\n"
