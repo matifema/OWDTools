@@ -4,14 +4,19 @@ An [Open WebUI](https://github.com/open-webui/open-webui) tool plugin that bring
 
 This tool enables your AI assistant to search the OWID catalog, seamlessly embed official interactive charts, and retrieve raw tabular data for deep analysis—all without leaving the chat interface.
 
-## ✨ Features
+## Screenshots
+
+![Example Chart](example_chart.png)
+![Example Map](example_map.png)
+
+## Features
 
 - **Semantic Catalog Search:** The LLM can quickly search through hundreds of OWID datasets (e.g., life expectancy, CO2 emissions, poverty) and find the exact metrics needed using fuzzy-matching and intelligent caching.
 - **Official Interactive Embeds:** Automatically embeds the authentic, fully interactive OWID Grapher directly into the chat interface via responsive iframes. Enjoy maps, multi-country comparisons, and rich tooltips just as they appear on the official website.
 - **Raw Data Extraction:** When numerical analysis is required, the tool can extract specific columns, filter by country and year, and return raw data in clean Markdown tables for the LLM to analyze.
 - **Dark-Mode Native:** Designed to integrate flawlessly with Open WebUI's aesthetic.
 
-## 🚀 Installation
+## Installation
 
 1. Open your Open WebUI interface.
 2. Navigate to **Workspace** -> **Tools**.
@@ -25,7 +30,10 @@ Ensure the Python environment running Open WebUI has the following packages inst
 pip install pandas owid-catalog
 ```
 
-## ⚙️ Configuration (Valves)
+**Important Note for Pip Installations:**
+If you installed Open WebUI via `pip` (rather than Docker), you may need to run `npx inject` in your environment to properly enable frontend features like interactive iframes.
+
+## Configuration (Valves)
 
 You can configure the tool's behavior via the Valves settings in Open WebUI:
 
@@ -34,7 +42,7 @@ You can configure the tool's behavior via the Valves settings in Open WebUI:
 - `max_table_rows` (Default: `20`): Maximum number of rows returned when fetching raw tabular data, protecting the LLM's context window.
 - `max_search_results` (Default: `5`): Limits the number of search results returned per query to balance relevance and token usage.
 
-## ⚖️ Disclaimer & Data Ownership
+## Disclaimer & Data Ownership
 
 **This project is not affiliated with, endorsed by, or sponsored by Our World in Data.**
 
@@ -44,6 +52,6 @@ All data, charts, and associated metadata retrieved by this tool are the propert
 
 Please refer to the [OWID Terms of Use](https://ourworldindata.org/how-to-use-our-world-in-data) and ensure you properly cite the original sources when utilizing this data in your own projects or publications.
 
-## 📄 License
+## License
 
 The wrapper code in this repository is open-sourced under the MIT License. See the [LICENSE](LICENSE) file for details.
