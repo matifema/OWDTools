@@ -181,8 +181,73 @@ def _fuzzy_match_country(target: str, available: list) -> str:
     matches = difflib.get_close_matches(target, str_available, n=1, cutoff=0.5)
     return matches[0] if matches else target
 
+def test_custom_chart_validation():
+    # Test validation logic
+    from owid_tools import _validate_layout
+    assert _validate_layout({"xaxis": {"title": "Test"}}) == {"xaxis": {"title": "Test"}}
+    assert _validate_layout({"paper_bgcolor": "red"}) == {}
+    assert _validate_layout({"annotations": [{"x": 1, "y": 2}]}) == {"annotations": [{"x": 1, "y": 2}]}
 
-def _build_html(title: str, traces: list, x_label: str, y_label: str, height: int = 460) -> str:
+
+def _validate_layout(config: dict) -> dict:
+    """Only allow safe, non-styling layout properties."""
+    allowed = {
+        "xaxis", "yaxis", "legend", "annotations", "shapes",
+        "margin", "title", "hovermode", "hoverlabel",
+    }
+    def _is_safe(k, v):
+        if k not in allowed: return False
+        # Recurse for nested dicts (like xaxis/yaxis)
+        if isinstance(v, dict):
+            for nk, nv in v.items():
+                if not _is_safe(nk, nv): return False
+        return True
+
+    return {k: v for k, v in config.items() if _is_safe(k, v)}
+def _build_html(title: str, traces: list, x_label: str, y_label: str, height: int = 460, extra_layout: Optional[dict] = None) -> str:
+    """Render a self-contained dark-mode Plotly HTML page."""
+    layout = {
+        "title": {
+            "text": title,
+            "font": {"size": 15, "color": _TEXT},
+            "x": 0.04,
+        },
+        "paper_bgcolor": _PANEL,
+        "plot_bgcolor":  _BG,
+        "font":   {"color": _TEXT, "family": "system-ui, -apple-system, sans-serif"},
+        "margin": {"l": 72, "r": 24, "t": 52, "b": 52},
+        "legend": {
+            "bgcolor": "rgba(0,0,0,0)",
+            "bordercolor": _BORDER,
+            "borderwidth": 1,
+            "font": {"color": _TEXT, "size": 12},
+        },
+        "xaxis": {
+            "gridcolor": _GRID,
+            "linecolor": _BORDER,
+            "tickcolor": _BORDER,
+            "tickformat": "d",
+            "title": {"text": x_label, "font": {"size": 12, "color": _MUTED}},
+            "tickfont": {"color": _MUTED},
+        },
+        "yaxis": {
+            "gridcolor": _GRID,
+            "linecolor": _BORDER,
+            "tickcolor": _BORDER,
+            "title": {"text": y_label, "font": {"size": 12, "color": _MUTED}},
+            "tickfont": {"color": _MUTED},
+            "zeroline": False,
+            "tickformat": "~s",
+        },
+        "hovermode": "x unified",
+        "hoverlabel": {
+            "bgcolor": _PANEL,
+            "bordercolor": _BORDER,
+            "font": {"color": _TEXT, "size": 12},
+        },
+    }
+    if extra_layout:
+        layout.update(_validate_layout(extra_layout))
     """Render a self-contained dark-mode Plotly HTML page."""
     layout = {
         "title": {
@@ -374,12 +439,11 @@ class Tools:
     def _can_embed(self) -> bool:
         return self.valves.allow_external_cdn and HTMLResponse is not None
 
-    def _render(self, title: str, traces: list, x_label: str, y_label: str) -> Any:
-        page = _build_html(title, traces, x_label, y_label, self.valves.chart_height_px)
+    def _render(self, title: str, traces: list, x_label: str, y_label: str, extra_layout: Optional[dict] = None) -> Any:
+        page = _build_html(title, traces, x_label, y_label, self.valves.chart_height_px, extra_layout=extra_layout)
         if self._can_embed():
             return HTMLResponse(content=page, headers={"Content-Disposition": "inline"})
         return _ascii_fallback(traces, title)
-
     # ─────────────────────────────────────────────────────────────────────────
 
     async def search_owid(
@@ -539,6 +603,30 @@ class Tools:
         )
         return self._render(chart_title, [trace], "Year", y_label)
 
+    async def custom_chart(
+        self,
+        slug: str,
+        country: Optional[str] = None,
+        year_start: Optional[Any] = None,
+        year_end: Optional[Any] = None,
+        custom_js_config: Optional[dict] = None,
+        value_column: Optional[str] = None,
+    ) -> Any:
+        """Fetch data and render a chart with custom Plotly configuration."""
+        if fetch is None:
+            return "Error: owid-catalog not installed."
+        try:
+            df = _cached_fetch_df(slug).copy()
+        except Exception as e:
+            return f"Error fetching '{slug}': {e}"
+        country_col, year_col = _detect_cols(df)
+        structural = {str(country_col).lower() if country_col else "", str(year_col).lower(), "code", "entity_code", "country_code"}
+        val_col = _detect_value_col(df, structural, value_column)
+        clean = _clean_series(df, country_col, year_col, val_col, country, year_start, year_end)
+        if clean.empty: return "No data found."
+        trace = _make_trace(x=clean[year_col].tolist(), y=[float(v) for v in clean[val_col].tolist()], name=country or "", color=_SERIES_COLORS[0])
+        return self._render(f"{slug} chart", [trace], "Year", str(val_col), extra_layout=custom_js_config)
+
     # ─────────────────────────────────────────────────────────────────────────
 
     async def compare_owid_countries(
@@ -670,6 +758,51 @@ class Tools:
                 df = df[df[year_col] <= end_val]
             df = df.sort_values(year_col)
 
+        if df.empty:
+            return (
+                f"No data for '{country}' in '{slug}'.\n"
+                f"Sample valid names: {_country_sample(_cached_fetch_df(slug), country_col)}"
+            )
+
+        if columns:
+            missing_cols = [c for c in columns if c not in df.columns]
+            if missing_cols:
+                return f"Error: Columns not found: {missing_cols}\nAvailable columns: {list(df.columns)}"
+            cols_to_keep = list(columns)
+            if country_col and country_col not in cols_to_keep:
+                cols_to_keep.insert(0, country_col)
+            if year_col and year_col not in cols_to_keep:
+                cols_to_keep.insert(1, year_col)
+            # Remove duplicates preserving order
+            seen = set()
+            cols_to_keep = [x for x in cols_to_keep if not (x in seen or seen.add(x))]
+            df = df[cols_to_keep]
+        elif len(df.columns) > 5:
+            return (
+                f"Dataset has {len(df.columns)} columns.\n"
+                f"Available columns: {list(df.columns)}\n\n"
+                f"Please specify a list of 'columns' to view (e.g. ['total_cases', 'new_deaths'])."
+            )
+
+        cap = self.valves.max_table_rows
+        df_subset = df.head(cap)
+
+        # Build simple markdown table
+        headers = list(df_subset.columns)
+        header_row = "| " + " | ".join(headers) + " |"
+        separator_row = "| " + " | ".join(["---"] * len(headers)) + " |"
+        
+        data_rows = []
+        for _, row in df_subset.iterrows():
+            data_rows.append("| " + " | ".join(str(x) for x in row.values) + " |")
+        
+        md_table = "\n".join([header_row, separator_row] + data_rows)
+        
+        return (
+            f"Data: {slug} | {country or 'all entities'} | "
+            f"showing {min(len(df), cap)} of {len(df)} rows\n\n"
+            f"{md_table}"
+        )
         if df.empty:
             return (
                 f"No data for '{country}' in '{slug}'.\n"
