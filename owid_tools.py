@@ -207,7 +207,6 @@ def _build_html(title: str, traces: list, x_label: str, y_label: str, height: in
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>{{html.escape(title)}}</title>
-<link href="https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,400;0,700;1,400&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{{box-sizing:border-box}}
 html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-family:{_FONT};font-size:14px;overflow:visible;}}
@@ -215,7 +214,7 @@ html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-fam
 </style>
 </head><body>
 <div id="chart"></div>
-<script src="https://cdn.plot.ly/plotly-{_PLOTLY_CDN}.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
 <script>
 (function(){{
   var traces = {json.dumps(traces)};
