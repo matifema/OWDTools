@@ -27,14 +27,15 @@ from starlette.responses import JSONResponse
 # Import helper functions and constants from the existing plugin.
 # The OpenWebUI-specific imports (HTMLResponse) will gracefully degrade to None.
 from owid_tools import (
+    _build_html,
     _cached_fetch_df,
     _cached_search,
-    _detect_cols,
-    _fuzzy_match_country,
     _clean_series,
-    _detect_value_col,
-    _make_trace,
     _country_sample,
+    _detect_cols,
+    _detect_value_col,
+    _fuzzy_match_country,
+    _make_trace,
     _SERIES_COLORS,
     _PLOTLY_CDN,
     _BG,
@@ -531,6 +532,10 @@ async def get_owid_data_json(
     Keep limit low (≤100) to avoid blowing up context. For full datasets, use
     the REST endpoint (see get_dataset_schema) in a fetch() call instead.
 
+    NOTE: For rendering charts inside claude.ai, prefer generate_chart_html()
+    which fetches + inlines data server-side. This tool exists as a fallback for
+    small datasets or when you need raw numbers in context.
+
     Args:
         slug: EXACT slug returned by search_owid.
         country: Optional country filter.
@@ -684,6 +689,10 @@ async def generate_chart_scaffold(
     Provides boilerplate: Plotly CDN, theme, fetch() template, and empty chart config.
     The LLM fills in the data parsing logic based on get_dataset_schema().
 
+    NOTE: Intended for use OUTSIDE claude.ai (e.g. developer environments where CSP
+    is not restricted). Inside claude.ai, use generate_chart_html() instead — it
+    fetches and inlines all data server-side, bypassing the iframe CSP restriction.
+
     ALL arguments are simple strings or ints — do NOT pass objects or dicts.
 
     Args:
@@ -812,6 +821,156 @@ html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-fam
     )
     return instructions + scaffold
 
+
+@mcp.tool
+async def generate_chart_html(
+    slug: str,
+    countries: Optional[List[str]] = None,
+    value_column: Optional[str] = None,
+    chart_type: str = "line",
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
+    title: Optional[str] = None,
+    x_label: Optional[str] = None,
+    y_label: Optional[str] = None,
+    height: int = 460,
+) -> str:
+    """
+    Returns fully self-contained HTML with data pre-embedded. Pass the result
+    directly as widget_code to show_widget without modification.
+
+    Server-side pipeline: fetches OWID data → builds Plotly traces → injects
+    data as inline JS arrays. No runtime fetch() needed — works inside claude.ai
+    sandboxes where external fetch() is blocked by CSP.
+
+    Args:
+        slug: EXACT slug returned by search_owid. Required.
+        countries: List of entity names to include as separate series.
+            If empty, auto-detects the first value column and shows all entities.
+        value_column: Exact column name from the schema to plot on y-axis.
+            Auto-detected from schema if not provided.
+        chart_type: One of: line, bar, area, scatter. Default is line.
+        year_start: Optional start year as integer.
+        year_end: Optional end year as integer.
+        title: Chart title. Auto-generated if not provided.
+        x_label: X-axis label. Defaults to "Year".
+        y_label: Y-axis label. Auto-detected from value_column if not provided.
+        height: Chart height in pixels. Default 460.
+    """
+    import pandas as pd
+
+    try:
+        _check_owid_catalog()
+    except RuntimeError as e:
+        return str(e)
+
+    try:
+        df = _cached_fetch_df(slug).copy()
+    except Exception as e:
+        return f"Error fetching '{slug}': {e}"
+
+    country_col, year_col = _detect_cols(df)
+    structural = {
+        str(country_col).lower() if country_col else "",
+        str(year_col).lower(),
+        "code",
+        "entity_code",
+        "country_code",
+    }
+
+    # Auto-detect value column if not provided
+    val_col = _detect_value_col(df, structural, value_column)
+    if val_col is None:
+        return f"Could not detect a numeric value column in '{slug}'."
+
+    # Determine which entities to chart
+    if countries and country_col:
+        available = df[country_col].dropna().unique().tolist()
+        matched_countries = []
+        for c in countries[:8]:
+            matched = _fuzzy_match_country(c, available)
+            matched_countries.append(matched)
+        entity_list = matched_countries
+    elif country_col:
+        # All entities — take top 8 by most recent value
+        all_entities = df[country_col].dropna().unique().tolist()
+        # Sort by most recent value in val_col, take top 8
+        df_latest = df.dropna(subset=[year_col, val_col]).copy()
+        df_latest[year_col] = pd.to_numeric(df_latest[year_col], errors="coerce")
+        df_latest = df_latest.dropna(subset=[year_col])
+        df_latest[year_col] = df_latest[year_col].astype(int)
+        if not df_latest.empty:
+            max_year = int(df_latest[year_col].max())
+            latest = df_latest[df_latest[year_col] >= max_year - 1].dropna(
+                subset=[val_col]
+            )
+            entity_means = (
+                latest.groupby(country_col)[val_col]
+                .mean()
+                .sort_values(ascending=False)
+                .head(8)
+            )
+            entity_list = entity_means.index.tolist()
+        else:
+            entity_list = [str(e) for e in all_entities[:8]]
+    else:
+        entity_list = [None]
+
+    # Build traces
+    traces = []
+    for idx, entity in enumerate(entity_list):
+        entity_df = df[[country_col, year_col, val_col]].copy() if country_col else df[[year_col, val_col]].copy()
+
+        # Filter by entity
+        if entity and country_col:
+            entity_df = entity_df[entity_df[country_col].astype(str) == entity]
+
+        # Filter and cast year
+        entity_df[year_col] = pd.to_numeric(entity_df[year_col], errors="coerce")
+        entity_df = entity_df.dropna(subset=[year_col])
+        entity_df[year_col] = entity_df[year_col].astype(int)
+
+        # Year range filter
+        if year_start is not None:
+            entity_df = entity_df[entity_df[year_col] >= int(year_start)]
+        if year_end is not None:
+            entity_df = entity_df[entity_df[year_col] <= int(year_end)]
+
+        # Clean values
+        entity_df[val_col] = pd.to_numeric(entity_df[val_col], errors="coerce")
+        entity_df = entity_df.dropna(subset=[val_col])
+
+        # Deduplicate by year — take mean
+        entity_df = entity_df.groupby(year_col, as_index=False)[val_col].mean()
+        entity_df = entity_df.sort_values(year_col).reset_index(drop=True)
+
+        if entity_df.empty:
+            continue
+
+        color = _SERIES_COLORS[idx % len(_SERIES_COLORS)]
+        entity_name = entity if entity else val_col
+        trace = _make_trace(
+            x=entity_df[year_col].tolist(),
+            y=[float(v) for v in entity_df[val_col].tolist()],
+            name=str(entity_name),
+            color=color,
+            chart_type=chart_type,
+        )
+        traces.append(trace)
+
+    if not traces:
+        return f"No chartable data found for '{slug}'."
+
+    chart_title = title or f"{slug.replace('-', ' ').title()}"
+    y_axis_label = y_label or val_col.replace("_", " ").title()
+
+    return _build_html(
+        title=chart_title,
+        traces=traces,
+        x_label=x_label or "Year",
+        y_label=y_axis_label,
+        height=height,
+    )
 
 # ---------------------------------------------------------------------------
 # Entry point
