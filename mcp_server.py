@@ -17,6 +17,9 @@ import os
 from typing import Any, List, Optional
 
 from fastmcp import FastMCP
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 # Import helper functions and constants from the existing plugin.
 # The OpenWebUI-specific imports (HTMLResponse) will gracefully degrade to None.
@@ -43,6 +46,80 @@ PORT = int(os.environ.get("PORT", "8000"))
 # FastMCP server instance
 # ---------------------------------------------------------------------------
 mcp = FastMCP("OWID Data Tools")
+
+# CORS middleware is injected at the entry point via mcp.run_http_async().
+
+
+    # --- REST API Routes ---
+
+@mcp.custom_route("/api/data/{slug}", methods=["GET"])
+async def rest_get_data(request):
+    from starlette.responses import JSONResponse as StarletteJSONResponse
+    import pandas as pd
+    from urllib.parse import unquote
+
+    # Parse path params
+    slug = request.path_params.get("slug", "")
+    query = dict(request.query_params)
+
+    year = int(query["year"]) if "year" in query else None
+    year_start = int(query["year_start"]) if "year_start" in query else None
+    year_end = int(query["year_end"]) if "year_end" in query else None
+    country = query.get("country")
+    limit = int(query.get("limit", "2000"))
+
+    try:
+        df = _cached_fetch_df(slug).copy()
+    except Exception as e:
+        return StarletteJSONResponse({"error": str(e)}, status_code=404)
+
+    country_col, year_col = _detect_cols(df)
+
+    if country and country_col:
+        available = df[country_col].dropna().unique().tolist()
+        matched = _fuzzy_match_country(country, available)
+        df = df[df[country_col].astype(str) == matched]
+
+    if year_col:
+        df[year_col] = pd.to_numeric(df[year_col], errors="coerce")
+        df = df.dropna(subset=[year_col])
+        df[year_col] = df[year_col].astype(int)
+        if year:
+            df = df[df[year_col] == year]
+        else:
+            if year_start:
+                df = df[df[year_col] >= year_start]
+            if year_end:
+                df = df[df[year_col] <= year_end]
+
+    df = df.dropna(how="all")
+    return StarletteJSONResponse(df.head(limit).to_dict(orient="records"))
+
+
+@mcp.custom_route("/api/schema/{slug}", methods=["GET"])
+async def rest_get_schema(request):
+    from starlette.responses import JSONResponse as StarletteJSONResponse
+    import pandas as pd
+
+    slug = request.path_params.get("slug", "")
+
+    try:
+        df = _cached_fetch_df(slug)
+    except Exception as e:
+        return StarletteJSONResponse({"error": str(e)}, status_code=404)
+
+    schema = {}
+    for col in df.columns:
+        info = {"dtype": str(df[col].dtype)}
+        if pd.api.types.is_numeric_dtype(df[col]):
+            info["min"] = round(float(df[col].min()), 4)
+            info["max"] = round(float(df[col].max()), 4)
+            info["nulls"] = int(df[col].isna().sum())
+        else:
+            info["unique_count"] = int(df[col].nunique())
+            info["sample"] = df[col].dropna().unique()[:5].tolist()
+        schema[col] = info
+    return StarletteJSONResponse(schema)
 
 
 # ---------------------------------------------------------------------------
@@ -372,9 +449,137 @@ async def custom_chart(
 
     return url
 
+@mcp.tool
+async def get_owid_data_json(
+    slug: str,
+    country: Optional[str] = None,
+    year_start: Optional[Any] = None,
+    year_end: Optional[Any] = None,
+    columns: Optional[List[str]] = None,
+    limit: int = 100,
+) -> str:
+    """
+    Returns OWID data as minified JSON for direct embedding in code artifacts.
+    Use instead of get_owid_data when generating visualizations or show_widget charts.
+    Keep limit low (≤100) to avoid blowing up context. For full datasets, use
+    the REST endpoint http://localhost:{PORT}/api/data/{slug} in a fetch() call instead.
+
+    Args:
+        slug: EXACT slug returned by search_owid.
+        country: Optional country filter.
+        year_start: Optional start year.
+        year_end: Optional end year.
+        columns: Specific columns to include.
+        limit: Max rows to return (default 100).
+    """
+    import pandas as pd
+    import json
+
+    try:
+        _check_owid_catalog()
+    except RuntimeError as e:
+        return str(e)
+
+    try:
+        df = _cached_fetch_df(slug).copy()
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+    country_col, year_col = _detect_cols(df)
+
+    if country and country_col:
+        available = df[country_col].dropna().unique().tolist()
+        matched = _fuzzy_match_country(country, available)
+        df = df[df[country_col].astype(str) == matched]
+
+    if year_col:
+        df[year_col] = pd.to_numeric(df[year_col], errors="coerce")
+        df = df.dropna(subset=[year_col])
+        df[year_col] = df[year_col].astype(int)
+        if year_start is not None:
+            df = df[df[year_col] >= int(year_start)]
+        if year_end is not None:
+            df = df[df[year_col] <= int(year_end)]
+        df = df.sort_values(year_col)
+
+    if columns:
+        missing = [c for c in columns if c not in df.columns]
+        if missing:
+            return json.dumps({"error": f"Columns not found: {missing}", "available": list(df.columns)})
+        keep = list(dict.fromkeys(
+            ([country_col] if country_col and country_col not in columns else []) +
+            ([year_col] if year_col and year_col not in columns else []) +
+            list(columns)
+        ))
+        df = df[keep]
+
+    df = df.dropna(how="all")
+    return json.dumps(df.head(limit).to_dict(orient="records"), default=str)
+
+
+@mcp.tool
+async def get_dataset_schema(slug: str) -> str:
+    """
+    Returns column names, data types, and numeric bounds for an OWID dataset.
+    Call this before building any chart or show_widget visualization to get
+    correct axis ranges, column names, and data types without fetching rows.
+    Also returns the REST endpoint URL to use in fetch() calls from show_widget.
+
+    Args:
+        slug: EXACT slug returned by search_owid.
+    """
+    import pandas as pd
+    import json
+
+    try:
+        _check_owid_catalog()
+    except RuntimeError as e:
+        return str(e)
+
+    try:
+        df = _cached_fetch_df(slug)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+    schema = {}
+    for col in df.columns:
+        info = {"dtype": str(df[col].dtype)}
+        if pd.api.types.is_numeric_dtype(df[col]):
+            info["min"] = round(float(df[col].min()), 4)
+            info["max"] = round(float(df[col].max()), 4)
+            info["nulls"] = int(df[col].isna().sum())
+        else:
+            info["unique_count"] = int(df[col].nunique())
+            info["sample"] = df[col].dropna().unique()[:5].tolist()
+        schema[col] = info
+
+    return json.dumps({
+        "slug": slug,
+        "total_rows": len(df),
+        "columns": schema,
+        "rest_endpoint": f"http://localhost:{PORT}/api/data/{slug}",
+        "schema_endpoint": f"http://localhost:{PORT}/api/schema/{slug}",
+    }, indent=2)
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+import asyncio
+
+async def _main():
+    await mcp.run_http_async(
+        transport="http",
+        host="0.0.0.0",
+        port=PORT,
+        middleware=[
+            Middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_methods=["GET"],
+                allow_headers=["*"],
+            )
+        ],
+    )
+
 if __name__ == "__main__":
-    mcp.run(transport="http", host="0.0.0.0", port=PORT)
+    asyncio.run(_main())
