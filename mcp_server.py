@@ -223,7 +223,7 @@ async def search_owid(query: str) -> str:
 
     return "\n".join(lines)
 
-
+'''
 @mcp.tool
 async def get_owid_data(
     slug: str,
@@ -450,7 +450,7 @@ async def custom_chart(
 
     return url
 
-
+'''
 
 @mcp.tool
 async def get_owid_data_json(
