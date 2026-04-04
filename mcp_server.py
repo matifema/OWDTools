@@ -670,9 +670,9 @@ async def get_dataset_schema(slug: str) -> str:
 async def generate_chart_scaffold(
     chart_type: str = "line",
     value_column: Optional[str] = None,
-    countries: Optional[List[str]] = None,
-    year_start: Optional[Any] = None,
-    year_end: Optional[Any] = None,
+    country: Optional[str] = None,
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
     title: Optional[str] = None,
     x_label: Optional[str] = None,
     y_label: Optional[str] = None,
@@ -681,43 +681,31 @@ async def generate_chart_scaffold(
     """
     Returns a complete, self-contained HTML scaffold for client-side chart rendering.
 
-    This tool provides the boilerplate: Plotly CDN, theme, fetch() template,
-    and empty chart config. YOU (the LLM) must fill in the data parsing logic
-    and chart configuration based on the schema from get_dataset_schema().
+    Provides boilerplate: Plotly CDN, theme, fetch() template, and empty chart config.
+    The LLM fills in the data parsing logic based on get_dataset_schema().
 
-    The returned HTML includes:
-        - Theme constants (colors, fonts) matching the OWID dark-mode palette
-        - A fetch() call template to {PUBLIC_URL}/api/data/{slug}
-        - An empty Plotly.newPlot() setup with proper layout
-        - Responsive iframe height sync
-
-    HOW TO USE:
-        1. Call get_dataset_schema(slug) to learn column names and types
-        2. Call generate_chart_scaffold() with your chart preferences
-        3. Replace the MARKER comments in the returned HTML with your data
-           parsing and trace-building logic
-        4. Return the completed HTML string to the user for inline rendering
+    ALL arguments are simple strings or ints — do NOT pass objects or dicts.
 
     Args:
-        chart_type: 'line', 'bar', 'area', or 'scatter'. Default 'line'.
-        value_column: Column name to plot on y-axis. Set null to auto-detect.
-        countries: Specific countries to include. Null = all countries.
-        year_start: Start year filter.
-        year_end: End year filter.
-        title: Chart title.
-        x_label: X-axis label.
-        y_label: Y-axis label.
+        chart_type: One of: line, bar, area, scatter. Default is line.
+        value_column: Exact column name from the schema to plot on y-axis. Must be a plain string, e.g. "life_expectancy_0".
+        country: Single country name to filter, e.g. "United States". Leave empty for all.
+        year_start: Start year as integer, e.g. 2000.
+        year_end: End year as integer, e.g. 2023.
+        title: Chart title as plain string, e.g. "CO2 Emissions".
+        x_label: X-axis label as plain string, e.g. "Year".
+        y_label: Y-axis label as plain string, e.g. "Emissions (tonnes)".
         height: Chart height in pixels. Default 460.
     """
     from urllib.parse import urlencode
 
     # Build query param hints for the fetch URL
     query_hints = {}
-    if countries:
-        query_hints["country"] = "~".join(countries)
-    if year_start:
+    if country:
+        query_hints["country"] = country
+    if year_start is not None:
         query_hints["year_start"] = str(year_start)
-    if year_end:
+    if year_end is not None:
         query_hints["year_end"] = str(year_end)
     if value_column:
         query_hints["columns"] = value_column
