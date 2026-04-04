@@ -8,7 +8,7 @@ Model Context Protocol using FastMCP with Streamable HTTP transport.
 Run:
     python mcp_server.py
 
-The server will start on http://0.0.0.0:PORT/mcp
+The server will start on https://aaaa.tail4ffb78.ts.net/mcp
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from owid_tools import (
 MAX_TABLE_ROWS = int(os.environ.get("MAX_TABLE_ROWS", "20"))
 MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "5"))
 PORT = int(os.environ.get("PORT", "8000"))
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "")  # e.g. https://myserver.com:8000 — LLM uses this for fetch()
 
 # ---------------------------------------------------------------------------
 # FastMCP server instance
@@ -449,6 +450,8 @@ async def custom_chart(
 
     return url
 
+
+
 @mcp.tool
 async def get_owid_data_json(
     slug: str,
@@ -462,7 +465,7 @@ async def get_owid_data_json(
     Returns OWID data as minified JSON for direct embedding in code artifacts.
     Use instead of get_owid_data when generating visualizations or show_widget charts.
     Keep limit low (≤100) to avoid blowing up context. For full datasets, use
-    the REST endpoint http://localhost:{PORT}/api/data/{slug} in a fetch() call instead.
+    the REST endpoint (see get_dataset_schema) in a fetch() call instead.
 
     Args:
         slug: EXACT slug returned by search_owid.
@@ -557,8 +560,8 @@ async def get_dataset_schema(slug: str) -> str:
         "slug": slug,
         "total_rows": len(df),
         "columns": schema,
-        "rest_endpoint": f"http://localhost:{PORT}/api/data/{slug}",
-        "schema_endpoint": f"http://localhost:{PORT}/api/schema/{slug}",
+        "rest_endpoint": f"{PUBLIC_URL}/api/data/{slug}",
+        "schema_endpoint": f"{PUBLIC_URL}/api/schema/{slug}",
     }, indent=2)
 
 # ---------------------------------------------------------------------------
