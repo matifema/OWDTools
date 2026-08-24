@@ -1,0 +1,41 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "owd-tools",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-24",
+
+  // The Python MCP server runs as a Cloudflare Container next to this Worker.
+  "containers": [
+    {
+      "class_name": "OWDToolsContainer",
+      "image": "./Dockerfile",
+      "instance_type": "standard-1",
+      "max_instances": 1
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "OWDToolsContainer",
+        "name": "OWD_TOOLS_CONTAINER"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "new_sqlite_classes": ["OWDToolsContainer"],
+      "tag": "v1"
+    }
+  ],
+
+  // Optional server configuration (all values are optional — OWID data is
+  // public and needs no token). Uncomment and adjust as needed:
+  "vars": {
+    // "PUBLIC_URL": "https://owd-tools.<your-subdomain>.workers.dev",
+    // "MCP_AUTH": "none",
+    // "MAX_TABLE_ROWS": "20",
+    // "MAX_SEARCH_RESULTS": "5"
+  }
+}

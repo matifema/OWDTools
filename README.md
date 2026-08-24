@@ -52,24 +52,63 @@ By default the server listens on `http://0.0.0.0:8000` and exposes the MCP endpo
 
 ### 2. Expose it over HTTPS
 
-Gemini and Claude can only reach your server through a public HTTPS URL. Two easy options:
+Gemini and Claude can only reach your server through a public HTTPS URL. Pick whichever fits:
 
+- **Cloudflare Containers** (recommended — full deployment on Cloudflare, see next section)
+- **Cloudflare Quick Tunnel** (zero setup, no domain):
+  ```bash
+  # from a second terminal — cloudflared gives you a temporary public URL
+  cloudflared tunnel --url http://localhost:8000
+  ```
+  Use the printed `https://<random>.trycloudflare.com` URL as your base URL.
 - **Tailscale Funnel** (no public IP needed):
   ```bash
   tailscale funnel 8000
   ```
-  This gives you a public URL such as `https://your-app.tailxxxx.ts.net`.
-- Any reverse proxy / cloud host (Fly.io, Render, a VPS with Caddy, Cloudflare Tunnel, …).
+- Any reverse proxy / cloud host (Fly.io, Render, a VPS with Caddy, …).
 
-### 3. Choose authentication
+## Deploy on Cloudflare (Workers + Containers)
 
-Set the `MCP_AUTH` environment variable (see `.env.example`):
+Everything needed is already in the repo: `Dockerfile`, `worker/index.js`,
+`wrangler.jsonc`, `package.json`. One command ships the Python MCP server as a
+Cloudflare Container behind a Worker — no server to manage.
+
+```bash
+npm install            # installs wrangler + @cloudflare/containers
+npx wrangler login     # authenticate with your Cloudflare account
+npx wrangler deploy    # builds the Docker image and deploys Worker + Container
+```
+
+Requirements: Docker running locally, and a Cloudflare **Workers Paid plan**
+(Containers is not on the free tier). After deploy, your MCP endpoint is:
+
+```text
+https://owd-tools.<your-workers-subdomain>.workers.dev/mcp
+```
+
+The first request after a deploy takes a minute or two while Cloudflare
+provisions the container (it sleeps after 30 minutes idle). Check status with
+`npx wrangler containers list` and logs with `npx wrangler containers logs`.
+
+No environment variables are required: OWID data is public, and the server
+auto-detects its public URL from the request. Optionally set `vars` in
+`wrangler.jsonc` (e.g. `PUBLIC_URL`, `MCP_AUTH`) or secrets with
+`npx wrangler secret put MCP_API_KEY` if you want to gate access.
+
+### 3. Authentication (optional)
+
+**You do not need any credentials to fetch OWID data — everything is public.**
+Authentication here only controls who may call *your* server (protects your compute
+from strangers if the URL is public). It is disabled by default.
+
+Set the `MCP_AUTH` environment variable only if you want to gate access
+(see `.env.example`):
 
 | Mode | When to use |
 | :--- | :--- |
-| `none` (default) | Private tunnels (e.g. Tailscale) or local testing |
+| `none` (default) | Public or private deployments; Gemini and Claude connect with no token |
 | `api_key` | Gemini's **API key** auth — set `MCP_API_KEY` and use it as the bearer token |
-| `oauth` | **Required by claude.ai** — set `PUBLIC_URL` to your public HTTPS base URL |
+| `oauth` | Standard OAuth 2.1 sign-in (e.g. if you want claude.ai's connector to authenticate users before using your server) — set `PUBLIC_URL` |
 
 ### 4. Connect
 
@@ -79,11 +118,9 @@ Set the `MCP_AUTH` environment variable (see `.env.example`):
 https://<your-public-url>/mcp
 ```
 
-Then pick the auth mode you configured (`None`, `API key`, or `Google/OAuth`).
+Choose **No authentication** (or API key / OAuth if you enabled them).
 
-**Claude** — In [claude.ai](https://claude.ai), open **Settings → Connect → MCP Servers**, choose **Add remote MCP server**, and enter the same URL. Claude performs OAuth discovery automatically; when prompted, approve the authorization screen.
-
-> For Claude, remember to run with `MCP_AUTH=oauth` and a public `PUBLIC_URL`, otherwise the connection will be rejected.
+**Claude** — In [claude.ai](https://claude.ai), open **Settings → Connectors → Add custom connector** and enter the same URL. If the server advertises OAuth (`MCP_AUTH=oauth`), Claude will run the authorization flow; otherwise it connects with no authentication.
 
 After connecting, you can ask either assistant to e.g. *"search OWID for life expectancy and chart the United States"* — it will call the exposed tools (`search_owid`, `generate_chart_html`, `get_dataset_schema`, `get_owid_data_json`, …).
 

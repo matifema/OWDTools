@@ -1,0 +1,12 @@
+.git
+.gitignore
+node_modules
+.wrangler
+__pycache__
+*.pyc
+tests
+*.png
+*.md
+.env
+.env.example
+memory-bank

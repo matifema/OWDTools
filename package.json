@@ -1,0 +1,19 @@
+{
+  "name": "owd-tools",
+  "version": "2.3.0",
+  "private": true,
+  "description": "OWID Data Tools — remote MCP server deployable on Cloudflare Workers + Containers",
+  "main": "worker/index.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "containers:list": "wrangler containers list",
+    "containers:logs": "wrangler containers logs"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

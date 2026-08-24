@@ -7,9 +7,10 @@ data fetching, and charting capabilities via the Model Context Protocol.
 The server uses Streamable HTTP transport (the transport supported by both
 Gemini and Claude remote MCP connections) and can be protected with either:
 
-  * no auth        (MCP_AUTH=none, default) — quick local use or private tunnels
+  * no auth        (MCP_AUTH=none, default) — OWID data is public, so no token is
+                    needed; recommended unless you want to protect your endpoint
   * a static key   (MCP_AUTH=api_key)      — Gemini "API key" auth
-  * OAuth 2.1      (MCP_AUTH=oauth)        — required by claude.ai remote MCP
+  * OAuth 2.1      (MCP_AUTH=oauth)        — optional sign-in for claude.ai connectors
 
 Run:
     python mcp_server.py
@@ -90,6 +91,30 @@ Always use the exact slug returned by search_owid — never guess slugs.
 """
 
 
+def _public_base(request=None) -> str:
+    """Public base URL for this server.
+
+    Prefers the PUBLIC_URL env var. When unset, infers it from the incoming
+    request (Host + X-Forwarded-Proto headers) so deployments behind
+    Cloudflare, tunnels, or proxies work with zero configuration.
+    """
+    if PUBLIC_URL:
+        return PUBLIC_URL
+    try:
+        if request is None:
+            from fastmcp.server.dependencies import get_http_request
+
+            request = get_http_request()
+        if request is not None:
+            host = request.headers.get("host", "")
+            scheme = request.headers.get("x-forwarded-proto", "https")
+            if host:
+                return f"{scheme}://{host}"
+    except Exception:
+        pass
+    return ""
+
+
 def _build_auth_provider():
     """Return a FastMCP auth provider based on MCP_AUTH."""
     if AUTH_MODE == "none":
@@ -147,8 +172,8 @@ async def health_check(request):
         {
             "status": "ok",
             "auth": AUTH_MODE,
-            "mcp_endpoint": f"{PUBLIC_URL}{MCP_PATH}",
-            "rest_base": f"{PUBLIC_URL}/api",
+            "mcp_endpoint": f"{_public_base(request)}{MCP_PATH}",
+            "rest_base": f"{_public_base(request)}/api",
         }
     )
 
@@ -265,7 +290,7 @@ async def rest_get_schema(request):
             "year_col": year_col,
             "value_cols": value_cols,
             "columns": schema,
-            "rest_endpoint": f"{PUBLIC_URL}/api/data/{slug}",
+            "rest_endpoint": f"{_public_base(request)}/api/data/{slug}",
         }
     )
 
@@ -514,7 +539,7 @@ async def get_dataset_schema(slug: str) -> str:
             "year_col": year_col,
             "value_cols": value_cols,
             "columns": schema,
-            "rest_endpoint": f"{PUBLIC_URL}/api/data/{slug}",
+            "rest_endpoint": f"{_public_base()}/api/data/{slug}",
         },
         indent=2,
     )
@@ -605,7 +630,7 @@ html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-fam
   var TRACE_CONFIG = {trace_extra};
 
   // Replace the URL below with the actual rest_endpoint from get_dataset_schema
-  var ENDPOINT = "{PUBLIC_URL}/api/data/{{slug}}";  /* <-- REPLACE with actual slug */
+  var ENDPOINT = "{_public_base()}/api/data/{{slug}}";  /* <-- REPLACE with actual slug */
   var QUERY = "{query_string}";  /* <-- Add query params as needed */
   var URL = ENDPOINT + (QUERY ? "?" + QUERY : "");
 
@@ -645,7 +670,7 @@ html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-fam
     instructions = (
         f"<!-- CHART SCAFFOLD — Fill in the TODO sections to complete the chart.\n"
         f"     Chart type: {chart_type}\n"
-        f"     Fetch URL pattern: {PUBLIC_URL}/api/data/{{slug}}?{query_string}\n"
+        f"     Fetch URL pattern: {_public_base()}/api/data/{{slug}}?{query_string}\n"
         f"     Use get_dataset_schema() to discover exact column names.\n"
         f"-->\n"
     )

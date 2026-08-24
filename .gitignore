@@ -23,3 +23,8 @@ htmlcov/
 .DS_Store
 Thumbs.db
 memory-bank/
+
+# Node / Cloudflare
+node_modules/
+.wrangler/
+dist/
