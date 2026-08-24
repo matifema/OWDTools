@@ -253,8 +253,8 @@ def _ascii_fallback(traces: list, title: str) -> str:
             lines.append(f"{thr:9.2f} |{''.join(row)}")
         lines.append("         +" + "--" * len(y))
         lines.append("           " + "".join(f"{str(x[i])[:4]:4} " for i in range(min(len(x), 12))))
-        lines.append("```\\n")
-    return "\\n".join(lines)
+        lines.append("```\n")
+    return "\n".join(lines)
 
 def _make_trace(x: list, y: list, name: str, color: str, chart_type: str = "line") -> dict:
     ct = chart_type.lower().strip()

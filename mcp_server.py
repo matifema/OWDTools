@@ -1,49 +1,64 @@
 """
 OWID Data Tools — MCP Server
 
-A remote MCP server that wraps the existing owid_tools.py plugin logic,
-exposing search, data fetching, and charting capabilities via the
-Model Context Protocol using FastMCP with Streamable HTTP transport.
+A remote MCP server that wraps the OWID tools plugin logic, exposing search,
+data fetching, and charting capabilities via the Model Context Protocol.
+
+The server uses Streamable HTTP transport (the transport supported by both
+Gemini and Claude remote MCP connections) and can be protected with either:
+
+  * no auth        (MCP_AUTH=none, default) — quick local use or private tunnels
+  * a static key   (MCP_AUTH=api_key)      — Gemini "API key" auth
+  * OAuth 2.1      (MCP_AUTH=oauth)        — required by claude.ai remote MCP
 
 Run:
     python mcp_server.py
 
-The server will start on https://aaaa.tail4ffb78.ts.net/mcp
+Environment variables:
+    MCP_AUTH           none | api_key | oauth   (default: none)
+    MCP_API_KEY        static bearer token when MCP_AUTH=api_key
+    PUBLIC_URL         public HTTPS base URL, e.g. https://your-app.example.com
+                       (required for oauth; used for REST endpoint links)
+    HOST / PORT        bind address (default 0.0.0.0:8000)
+    MCP_PATH           MCP endpoint path (default /mcp)
+    MAX_TABLE_ROWS     default max rows for raw data responses
+    MAX_SEARCH_RESULTS default max search results
+
+MCP endpoint (add this URL in Gemini / Claude):
+    {PUBLIC_URL}/mcp
 """
 
 from __future__ import annotations
 
-import html
 import json
-import os
 import os
 from typing import Any, List, Optional
 
+import pandas as pd
 from fastmcp import FastMCP
+from mcp.server.auth.settings import ClientRegistrationOptions
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
-# Import helper functions and constants from the existing plugin.
-# The OpenWebUI-specific imports (HTMLResponse) will gracefully degrade to None.
+# Import helper functions and constants from the OpenWebUI tool plugin.
+# The OpenWebUI-specific imports (HTMLResponse) degrade gracefully to None there.
 from owid_tools import (
+    _BG,
+    _BORDER,
+    _FONT,
+    _GRID,
+    _MUTED,
+    _PLOTLY_CDN,
+    _SERIES_COLORS,
+    _TEXT,
     _build_html,
     _cached_fetch_df,
     _cached_search,
-    _clean_series,
-    _country_sample,
     _detect_cols,
     _detect_value_col,
     _fuzzy_match_country,
     _make_trace,
-    _SERIES_COLORS,
-    _PLOTLY_CDN,
-    _BG,
-    _TEXT,
-    _MUTED,
-    _BORDER,
-    _GRID,
-    _FONT,
 )
 
 # ---------------------------------------------------------------------------
@@ -51,33 +66,105 @@ from owid_tools import (
 # ---------------------------------------------------------------------------
 MAX_TABLE_ROWS = int(os.environ.get("MAX_TABLE_ROWS", "20"))
 MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "5"))
+HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
-PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip(
-    "/"
-)  # e.g. https://myserver.com:8000 — LLM uses this for fetch()
+MCP_PATH = os.environ.get("MCP_PATH", "/mcp").strip()
+if not MCP_PATH.startswith("/"):
+    MCP_PATH = "/" + MCP_PATH
+AUTH_MODE = os.environ.get("MCP_AUTH", "none").strip().lower()
+# Public HTTPS base URL, e.g. https://your-app.example.com (no trailing slash).
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
+
+_INSTRUCTIONS = """
+You have tools to explore Our World in Data (OWID).
+
+Workflow:
+  1. search_owid(query) to discover exact slugs and valid entity names.
+  2. For a chart: use generate_chart_html (works in sandboxed iframes such as
+     claude.ai) or get_dataset_schema + generate_chart_scaffold for a
+     client-side template.
+  3. For raw numbers: get_owid_data_json (small) or the REST endpoint returned
+     by get_dataset_schema (large datasets).
+
+Always use the exact slug returned by search_owid — never guess slugs.
+"""
+
+
+def _build_auth_provider():
+    """Return a FastMCP auth provider based on MCP_AUTH."""
+    if AUTH_MODE == "none":
+        return None
+
+    if AUTH_MODE == "api_key":
+        from fastmcp.server.auth import StaticTokenVerifier
+
+        key = os.environ.get("MCP_API_KEY", "").strip()
+        if not key:
+            raise RuntimeError(
+                "MCP_AUTH=api_key requires MCP_API_KEY to be set "
+                "(the bearer token clients must send)."
+            )
+        return StaticTokenVerifier(
+            {key: {"client_id": "api-key", "scopes": []}},
+        )
+
+    if AUTH_MODE == "oauth":
+        from fastmcp.server.auth import OAuthProvider
+
+        if not PUBLIC_URL:
+            raise RuntimeError(
+                "MCP_AUTH=oauth requires PUBLIC_URL (e.g. "
+                "https://your-app.example.com) so OAuth discovery works."
+            )
+        # Dynamic client registration (RFC 7591) is what claude.ai and Gemini
+        # use to obtain a client_id before the authorization-code flow.
+        return OAuthProvider(
+            base_url=PUBLIC_URL,
+            client_registration_options=ClientRegistrationOptions(enabled=True),
+        )
+
+    raise RuntimeError(
+        f"Unsupported MCP_AUTH={AUTH_MODE!r}. Use one of: none, api_key, oauth."
+    )
+
 
 # ---------------------------------------------------------------------------
 # FastMCP server instance
 # ---------------------------------------------------------------------------
-mcp = FastMCP("OWID Data Tools")
+mcp = FastMCP(
+    "OWID Data Tools",
+    instructions=_INSTRUCTIONS,
+    auth=_build_auth_provider(),
+)
 
-# CORS middleware is injected at the entry point via mcp.run_http_async().
+
+# ---------------------------------------------------------------------------
+# Health check (unauthenticated, useful for deployment probes)
+# ---------------------------------------------------------------------------
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request):
+    return JSONResponse(
+        {
+            "status": "ok",
+            "auth": AUTH_MODE,
+            "mcp_endpoint": f"{PUBLIC_URL}{MCP_PATH}",
+            "rest_base": f"{PUBLIC_URL}/api",
+        }
+    )
 
 
-# --- REST API Routes ---
+# ---------------------------------------------------------------------------
+# REST API Routes (public OWID data; used by client-side chart scaffolds)
+# ---------------------------------------------------------------------------
 
 
 @mcp.custom_route("/api/data/{slug}", methods=["GET"])
 async def rest_get_data(request):
-    from starlette.responses import JSONResponse as StarletteJSONResponse
-    import pandas as pd
     from urllib.parse import unquote
 
-    # Parse path params
     slug = request.path_params.get("slug", "")
     query = dict(request.query_params)
 
-    # Optional columns filter for efficient targeted fetches
     columns = None
     if "columns" in query:
         columns = [c.strip() for c in unquote(query["columns"]).split(",") if c.strip()]
@@ -91,7 +178,7 @@ async def rest_get_data(request):
     try:
         df = _cached_fetch_df(slug).copy()
     except Exception as e:
-        return StarletteJSONResponse({"error": str(e)}, status_code=404)
+        return JSONResponse({"error": str(e)}, status_code=404)
 
     country_col, year_col = _detect_cols(df)
 
@@ -112,7 +199,6 @@ async def rest_get_data(request):
             if year_end:
                 df = df[df[year_col] <= year_end]
 
-    # Column projection — only return requested columns
     if columns:
         needed = list(
             dict.fromkeys(
@@ -123,7 +209,7 @@ async def rest_get_data(request):
         )
         missing = [c for c in columns if c not in df.columns]
         if missing:
-            return StarletteJSONResponse(
+            return JSONResponse(
                 {
                     "error": f"Columns not found: {missing}",
                     "available": list(df.columns),
@@ -133,20 +219,17 @@ async def rest_get_data(request):
         df = df[[c for c in needed if c in df.columns]]
 
     df = df.dropna(how="all")
-    return StarletteJSONResponse(df.head(limit).to_dict(orient="records"))
+    return JSONResponse(df.head(limit).to_dict(orient="records"))
 
 
 @mcp.custom_route("/api/schema/{slug}", methods=["GET"])
 async def rest_get_schema(request):
-    from starlette.responses import JSONResponse as StarletteJSONResponse
-    import pandas as pd
-
     slug = request.path_params.get("slug", "")
 
     try:
         df = _cached_fetch_df(slug)
     except Exception as e:
-        return StarletteJSONResponse({"error": str(e)}, status_code=404)
+        return JSONResponse({"error": str(e)}, status_code=404)
 
     country_col, year_col = _detect_cols(df)
     structural = {
@@ -174,7 +257,7 @@ async def rest_get_schema(request):
             info["sample"] = df[col].dropna().unique()[:5].tolist()
         schema[col] = info
 
-    return StarletteJSONResponse(
+    return JSONResponse(
         {
             "slug": slug,
             "total_rows": len(df),
@@ -201,7 +284,7 @@ def _check_owid_catalog() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tools
+# MCP Tools
 # ---------------------------------------------------------------------------
 @mcp.tool
 async def search_owid(query: str) -> str:
@@ -288,235 +371,6 @@ async def search_owid(query: str) -> str:
     return "\n".join(lines)
 
 
-r'''
-@mcp.tool
-async def get_owid_data(
-    slug: str,
-    country: Optional[str] = None,
-    year_start: Optional[Any] = None,
-    year_end: Optional[Any] = None,
-    columns: Optional[List[str]] = None,
-) -> str:
-    """
-    Fetch raw OWID data as a plain-text table.
-
-    Use only when the user explicitly needs numbers.
-    For any visualisation use chart_owid_data.
-
-    Args:
-        slug: EXACT slug returned by search_owid. Do NOT guess or hallucinate.
-        country: Optional country name.
-        year_start: Optional start year/date.
-        year_end: Optional end year/date.
-        columns: Specific columns to include. Leave blank to discover available columns if the dataset is large.
-    """
-    import pandas as pd
-
-    try:
-        _check_owid_catalog()
-    except RuntimeError as e:
-        return str(e)
-
-    try:
-        df = _cached_fetch_df(slug).copy()
-    except Exception as e:
-        return f"Error fetching '{slug}': {e}"
-
-    country_col, year_col = _detect_cols(df)
-
-    if country and country_col:
-        available = df[country_col].dropna().unique().tolist()
-        matched_country = _fuzzy_match_country(country, available)
-        df = df[df[country_col].astype(str) == matched_country]
-
-    if year_col:
-        df = df.copy()
-        is_date = pd.api.types.is_datetime64_any_dtype(df[year_col])
-        if not is_date:
-            first_valid = (
-                df[year_col].dropna().iloc[0]
-                if not df[year_col].dropna().empty
-                else None
-            )
-            if (
-                first_valid is not None
-                and isinstance(first_valid, str)
-                and len(first_valid) >= 10
-            ):
-                import re
-
-                is_date = bool(re.match(r"^\d{4}-\d{2}-\d{2}", str(first_valid)))
-        if is_date:
-            df[year_col] = pd.to_datetime(df[year_col], errors="coerce")
-        else:
-            df[year_col] = pd.to_numeric(df[year_col], errors="coerce")
-        df = df.dropna(subset=[year_col])
-        if not is_date:
-            df[year_col] = df[year_col].astype(int)
-        if year_start is not None:
-            start_val = pd.to_datetime(year_start) if is_date else float(year_start)
-            df = df[df[year_col] >= start_val]
-        if year_end is not None:
-            end_val = pd.to_datetime(year_end) if is_date else float(year_end)
-            df = df[df[year_col] <= end_val]
-        df = df.sort_values(year_col)
-
-    if df.empty:
-        return (
-            f"No data for '{country}' in '{slug}'.\n"
-            f"Sample valid names: {_country_sample(_cached_fetch_df(slug), country_col)}"
-        )
-
-    if columns:
-        missing_cols = [c for c in columns if c not in df.columns]
-        if missing_cols:
-            return f"Error: Columns not found: {missing_cols}\nAvailable columns: {list(df.columns)}"
-        cols_to_keep = list(columns)
-        if country_col and country_col not in cols_to_keep:
-            cols_to_keep.insert(0, country_col)
-        if year_col and year_col not in cols_to_keep:
-            cols_to_keep.insert(1, year_col)
-        # Remove duplicates preserving order
-        seen: set[str] = set()
-        cols_to_keep = [x for x in cols_to_keep if not (x in seen or seen.add(x))]
-        df = df[cols_to_keep]
-    elif len(df.columns) > 5:
-        return (
-            f"Dataset has {len(df.columns)} columns.\n"
-            f"Available columns: {list(df.columns)}\n\n"
-            f"Please specify a list of 'columns' to view (e.g. ['total_cases', 'new_deaths'])."
-        )
-
-    cap = MAX_TABLE_ROWS
-    df_subset = df.head(cap)
-
-    # Build simple markdown table
-    headers = list(df_subset.columns)
-    header_row = "| " + " | ".join(headers) + " |"
-    separator_row = "| " + " | ".join(["---"] * len(headers)) + " |"
-
-    data_rows = []
-    for _, row in df_subset.iterrows():
-        data_rows.append("| " + " | ".join(str(x) for x in row.values) + " |")
-
-    md_table = "\n".join([header_row, separator_row] + data_rows)
-
-    return (
-        f"Data: {slug} | {country or 'all entities'} | "
-        f"showing {min(len(df), cap)} of {len(df)} rows\n\n"
-        f"{md_table}"
-    )
-
-
-@mcp.tool
-async def chart_owid_data(
-    slug: str,
-    tab: Optional[str] = None,
-    countries: Optional[List[str]] = None,
-    time: Optional[str] = None,
-) -> str:
-    """
-    Get the URL for the official Our World in Data interactive grapher chart.
-
-    This provides the most complete and authentic OWID visualisation,
-    often including maps, multi-country comparisons, and rich metadata.
-
-    Args:
-        slug: EXACT slug returned by search_owid. Do NOT guess or hallucinate.
-        tab: Optional chart view ('chart', 'map', or 'table').
-        countries: Optional list of specific country names to pre-filter in the chart.
-        time: Optional time range, e.g., '2020' or '1990..2020'.
-    """
-    import urllib.parse
-
-    url = f"https://ourworldindata.org/grapher/{slug}"
-
-    query_params = []
-    if tab:
-        query_params.append(f"tab={tab}")
-    if countries:
-        try:
-            df = _cached_fetch_df(slug)
-            country_col, _ = _detect_cols(df)
-            if country_col:
-                available = df[country_col].dropna().unique().tolist()
-                countries = [_fuzzy_match_country(c, available) for c in countries]
-        except Exception:
-            pass
-        country_str = "~".join(countries)
-        query_params.append(f"country={urllib.parse.quote(country_str)}")
-        if tab == "map":
-            # The map view specifically uses mapSelect to highlight countries
-            map_select_str = "~" + "~".join(countries)
-            query_params.append(f"mapSelect={urllib.parse.quote(map_select_str)}")
-    if time:
-        query_params.append(f"time={time}")
-
-    if query_params:
-        url += "?" + "&".join(query_params)
-
-    return url
-
-
-@mcp.tool
-async def custom_chart(
-    slug: str,
-    countries: Optional[List[str]] = None,
-    year_start: Optional[Any] = None,
-    year_end: Optional[Any] = None,
-    value_column: Optional[str] = None,
-    chart_type: str = "line",
-) -> str:
-    """
-    Get a URL to the official OWID grapher with optional country and time filtering.
-
-    This builds an OWID grapher URL with country and time parameters applied,
-    similar to chart_owid_data. Use this when you need a direct link to view
-    data for specific countries or time ranges.
-
-    Args:
-        slug: EXACT slug returned by search_owid. Do NOT guess or hallucinate.
-        countries: Optional list of country names to highlight.
-        year_start: Optional start year (used for time parameter).
-        year_end: Optional end year (used for time parameter).
-        value_column: Optional value column name (unused for URL, kept for compatibility).
-        chart_type: Chart type ('line', 'bar', 'area', 'scatter') — unused for URL.
-    """
-    import urllib.parse
-
-    url = f"https://ourworldindata.org/grapher/{slug}"
-
-    query_params = []
-    if countries:
-        try:
-            df = _cached_fetch_df(slug)
-            country_col, _ = _detect_cols(df)
-            if country_col:
-                available = df[country_col].dropna().unique().tolist()
-                countries = [_fuzzy_match_country(c, available) for c in countries]
-        except Exception:
-            pass
-        country_str = "~".join(countries)
-        query_params.append(f"country={urllib.parse.quote(country_str)}")
-
-    # Build time parameter from year_start/year_end
-    if year_start is not None or year_end is not None:
-        time_parts = []
-        if year_start is not None:
-            time_parts.append(str(year_start))
-        if year_end is not None:
-            time_parts.append(str(year_end))
-        time_param = "..".join(time_parts)
-        if time_param:
-            query_params.append(f"time={time_param}")
-
-    if query_params:
-        url += "?" + "&".join(query_params)
-
-    return url
-'''
-
-
 @mcp.tool
 async def get_owid_data_json(
     slug: str,
@@ -528,11 +382,11 @@ async def get_owid_data_json(
 ) -> str:
     """
     Returns OWID data as minified JSON for direct embedding in code artifacts.
-    Use instead of get_owid_data when generating visualizations or show_widget charts.
-    Keep limit low (≤100) to avoid blowing up context. For full datasets, use
+    Use instead of a plain-text table when generating visualizations or widgets.
+    Keep limit low (<=100) to avoid blowing up context. For full datasets, use
     the REST endpoint (see get_dataset_schema) in a fetch() call instead.
 
-    NOTE: For rendering charts inside claude.ai, prefer generate_chart_html()
+    NOTE: For rendering charts inside sandboxed clients, prefer generate_chart_html()
     which fetches + inlines data server-side. This tool exists as a fallback for
     small datasets or when you need raw numbers in context.
 
@@ -544,9 +398,6 @@ async def get_owid_data_json(
         columns: Specific columns to include.
         limit: Max rows to return (default 100).
     """
-    import pandas as pd
-    import json
-
     try:
         _check_owid_catalog()
     except RuntimeError as e:
@@ -599,7 +450,7 @@ async def get_owid_data_json(
 @mcp.tool
 async def get_dataset_schema(slug: str) -> str:
     """
-    Returns structural metadata for an OWID dataset WITHOUT fetching any row data.
+    Returns structural metadata for an OWID dataset WITHOUT fetching row data.
     This is the FIRST tool to call after search_owid when building a chart.
 
     Returns:
@@ -619,8 +470,6 @@ async def get_dataset_schema(slug: str) -> str:
     Args:
         slug: EXACT slug returned by search_owid.
     """
-    import pandas as pd
-
     try:
         _check_owid_catalog()
     except RuntimeError as e:
@@ -689,9 +538,9 @@ async def generate_chart_scaffold(
     Provides boilerplate: Plotly CDN, theme, fetch() template, and empty chart config.
     The LLM fills in the data parsing logic based on get_dataset_schema().
 
-    NOTE: Intended for use OUTSIDE claude.ai (e.g. developer environments where CSP
-    is not restricted). Inside claude.ai, use generate_chart_html() instead — it
-    fetches and inlines all data server-side, bypassing the iframe CSP restriction.
+    NOTE: Intended for use OUTSIDE sandboxed clients (e.g. developer environments
+    where CSP is not restricted). Inside sandboxed clients, use generate_chart_html()
+    instead — it fetches and inlines all data server-side, bypassing the iframe CSP.
 
     ALL arguments are simple strings or ints — do NOT pass objects or dicts.
 
@@ -708,7 +557,6 @@ async def generate_chart_scaffold(
     """
     from urllib.parse import urlencode
 
-    # Build query param hints for the fetch URL
     query_hints = {}
     if country:
         query_hints["country"] = country
@@ -720,7 +568,6 @@ async def generate_chart_scaffold(
         query_hints["columns"] = value_column
     query_string = urlencode(query_hints) if query_hints else ""
 
-    # Chart type mapping for trace config
     trace_type_map = {
         "line": '{"mode": "lines+markers"}',
         "bar": '{"type": "bar"}',
@@ -729,12 +576,13 @@ async def generate_chart_scaffold(
     }
     trace_extra = trace_type_map.get(chart_type.lower(), trace_type_map["line"])
 
-    # Build the scaffold HTML
+    import html as html_mod
+
     scaffold = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>{html.escape(title or "OWID Chart")}</title>
+<title>{html_mod.escape(title or "OWID Chart")}</title>
 <link href="https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,400;0,700;1,400&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{{box-sizing:border-box}}
@@ -746,19 +594,16 @@ html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-fam
 <script src="https://cdn.plot.ly/plotly-{_PLOTLY_CDN}.min.js"></script>
 <script>
 (function(){{
-  // ── Theme Constants ──
   var COLORS = {json.dumps(_SERIES_COLORS)};
   var BG = "{_BG}", TEXT = "{_TEXT}", MUTED = "{_MUTED}";
   var GRID = "{_GRID}", BORDER = "{_BORDER}";
   var FONT = "{_FONT}";
 
-  // ── Chart Config ──
   var TITLE = {json.dumps(title or "")};
   var X_LABEL = {json.dumps(x_label or "Year")};
   var Y_LABEL = {json.dumps(y_label or "")};
   var TRACE_CONFIG = {trace_extra};
 
-  // ── Data Fetch Template ──
   // Replace the URL below with the actual rest_endpoint from get_dataset_schema
   var ENDPOINT = "{PUBLIC_URL}/api/data/{{slug}}";  /* <-- REPLACE with actual slug */
   var QUERY = "{query_string}";  /* <-- Add query params as needed */
@@ -782,25 +627,11 @@ html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-fam
   // The data is a JSON array of objects. Example structure:
   //   [{{"year": 2000, "country": "France", "value": 75.2}}, ...]
   // Use Array.prototype.reduce() to group by country, then build traces.
-  //
-  // Example parsing pattern:
-  //   var byCountry = {{}};
-  //   data.forEach(function(row) {{
-  //     var key = row.country_col || "All";  // Replace country_col with actual column name
-  //     if (!byCountry[key]) byCountry[key] = {{x: [], y: []}};
-  //     byCountry[key].x.push(row.year_col); // Replace year_col
-  //     byCountry[key].y.push(row.value_col); // Replace value_col
-  //   }});
-  //   var traces = Object.keys(byCountry).map(function(k, i) {{
-  //     return Object.assign({{name: k, x: byCountry[k].x, y: byCountry[k].y}}, TRACE_CONFIG,
-  //       {{line: {{color: COLORS[i % COLORS.length], width: 2}}, marker: {{color: COLORS[i % COLORS.length]}}}});
-  //   }});
 
   var traces = [];  /* <-- Build traces from fetched data here */
 
   Plotly.newPlot("chart", traces, layout, config);
 
-  // ── Responsive Height Sync ──
   function syncHeight(){{
     var h = document.documentElement.scrollHeight;
     try{{ if(window.frameElement) window.frameElement.style.height = h + "px"; }}catch(e){{}}
@@ -811,7 +642,6 @@ html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-fam
 }})();
 </script></body></html>"""
 
-    # Usage instructions as a comment block prepended
     instructions = (
         f"<!-- CHART SCAFFOLD — Fill in the TODO sections to complete the chart.\n"
         f"     Chart type: {chart_type}\n"
@@ -839,7 +669,7 @@ async def generate_chart_html(
     Returns fully self-contained HTML with data pre-embedded. Pass the result
     directly as widget_code to show_widget without modification.
 
-    Server-side pipeline: fetches OWID data → builds Plotly traces → injects
+    Server-side pipeline: fetches OWID data -> builds Plotly traces -> injects
     data as inline JS arrays. No runtime fetch() needed — works inside claude.ai
     sandboxes where external fetch() is blocked by CSP.
 
@@ -857,8 +687,6 @@ async def generate_chart_html(
         y_label: Y-axis label. Auto-detected from value_column if not provided.
         height: Chart height in pixels. Default 460.
     """
-    import pandas as pd
-
     try:
         _check_owid_catalog()
     except RuntimeError as e:
@@ -878,23 +706,15 @@ async def generate_chart_html(
         "country_code",
     }
 
-    # Auto-detect value column if not provided
     val_col = _detect_value_col(df, structural, value_column)
     if val_col is None:
         return f"Could not detect a numeric value column in '{slug}'."
 
-    # Determine which entities to chart
     if countries and country_col:
         available = df[country_col].dropna().unique().tolist()
-        matched_countries = []
-        for c in countries[:8]:
-            matched = _fuzzy_match_country(c, available)
-            matched_countries.append(matched)
-        entity_list = matched_countries
+        entity_list = [_fuzzy_match_country(c, available) for c in countries[:8]]
     elif country_col:
-        # All entities — take top 8 by most recent value
         all_entities = df[country_col].dropna().unique().tolist()
-        # Sort by most recent value in val_col, take top 8
         df_latest = df.dropna(subset=[year_col, val_col]).copy()
         df_latest[year_col] = pd.to_numeric(df_latest[year_col], errors="coerce")
         df_latest = df_latest.dropna(subset=[year_col])
@@ -916,31 +736,29 @@ async def generate_chart_html(
     else:
         entity_list = [None]
 
-    # Build traces
     traces = []
     for idx, entity in enumerate(entity_list):
-        entity_df = df[[country_col, year_col, val_col]].copy() if country_col else df[[year_col, val_col]].copy()
+        entity_df = (
+            df[[country_col, year_col, val_col]].copy()
+            if country_col
+            else df[[year_col, val_col]].copy()
+        )
 
-        # Filter by entity
         if entity and country_col:
             entity_df = entity_df[entity_df[country_col].astype(str) == entity]
 
-        # Filter and cast year
         entity_df[year_col] = pd.to_numeric(entity_df[year_col], errors="coerce")
         entity_df = entity_df.dropna(subset=[year_col])
         entity_df[year_col] = entity_df[year_col].astype(int)
 
-        # Year range filter
         if year_start is not None:
             entity_df = entity_df[entity_df[year_col] >= int(year_start)]
         if year_end is not None:
             entity_df = entity_df[entity_df[year_col] <= int(year_end)]
 
-        # Clean values
         entity_df[val_col] = pd.to_numeric(entity_df[val_col], errors="coerce")
         entity_df = entity_df.dropna(subset=[val_col])
 
-        # Deduplicate by year — take mean
         entity_df = entity_df.groupby(year_col, as_index=False)[val_col].mean()
         entity_df = entity_df.sort_values(year_col).reset_index(drop=True)
 
@@ -972,22 +790,21 @@ async def generate_chart_html(
         height=height,
     )
 
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-import asyncio
-
-
 async def _main():
     await mcp.run_http_async(
-        transport="http",
-        host="0.0.0.0",
+        transport="streamable-http",
+        host=HOST,
         port=PORT,
+        path=MCP_PATH,
         middleware=[
             Middleware(
                 CORSMiddleware,
                 allow_origins=["*"],
-                allow_methods=["GET"],
+                allow_methods=["*"],
                 allow_headers=["*"],
             )
         ],
@@ -995,4 +812,6 @@ async def _main():
 
 
 if __name__ == "__main__":
+    import asyncio
+
     asyncio.run(_main())

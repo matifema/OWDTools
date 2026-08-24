@@ -1,4 +1,4 @@
-# OWID Data Tools — MCP Server dependencies
+# OWID Data Tools — dependencies
 #
 # Install with:
 #   pip install -r requirements.txt
@@ -8,5 +8,5 @@ owid-catalog>=0.2.0
 pandas>=1.5.0
 pydantic>=2.0.0
 
-# MCP server framework
-fastmcp>=2.0.0
+# MCP server framework (Streamable HTTP + OAuth 2.1 support)
+fastmcp>=3.4.0

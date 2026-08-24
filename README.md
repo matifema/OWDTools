@@ -1,8 +1,8 @@
 # OWID Data Tools for Open WebUI
 
-An [Open WebUI](https://github.com/open-webui/open-webui) tool plugin that brings the wealth of data from **[Our World in Data (OWID)](https://ourworldindata.org/)** directly into your LLM chats. 
+An [Open WebUI](https://github.com/open-webui/open-webui) tool plugin **and a remote MCP server** that bring the wealth of data from **[Our World in Data (OWID)](https://ourworldindata.org/)** directly into your LLM chats.
 
-This tool enables your AI assistant to search the OWID catalog, seamlessly embed official interactive charts, and retrieve raw tabular data for deep analysis—all without leaving the chat interface.
+This tool enables your AI assistant to search the OWID catalog, seamlessly embed official interactive charts, and retrieve raw tabular data for deep analysis—all without leaving the chat interface. It works as an Open WebUI tool and as an MCP server you can connect directly from **Gemini** and **Claude**.
 
 ## Screenshots
 
@@ -36,6 +36,56 @@ pip install pandas owid-catalog
 
 **Important Note for Pip Installations:**
 If you installed Open WebUI via `pip` (rather than Docker), you may need to run `npx inject` in your environment to properly enable frontend features like interactive iframes.
+
+## Using from Gemini & Claude (remote MCP)
+
+The repository also ships `mcp_server.py`, a standalone MCP server that Gemini and Claude can connect to directly from their websites.
+
+### 1. Install & run
+
+```bash
+pip install -r requirements.txt
+python mcp_server.py
+```
+
+By default the server listens on `http://0.0.0.0:8000` and exposes the MCP endpoint at `/mcp`.
+
+### 2. Expose it over HTTPS
+
+Gemini and Claude can only reach your server through a public HTTPS URL. Two easy options:
+
+- **Tailscale Funnel** (no public IP needed):
+  ```bash
+  tailscale funnel 8000
+  ```
+  This gives you a public URL such as `https://your-app.tailxxxx.ts.net`.
+- Any reverse proxy / cloud host (Fly.io, Render, a VPS with Caddy, Cloudflare Tunnel, …).
+
+### 3. Choose authentication
+
+Set the `MCP_AUTH` environment variable (see `.env.example`):
+
+| Mode | When to use |
+| :--- | :--- |
+| `none` (default) | Private tunnels (e.g. Tailscale) or local testing |
+| `api_key` | Gemini's **API key** auth — set `MCP_API_KEY` and use it as the bearer token |
+| `oauth` | **Required by claude.ai** — set `PUBLIC_URL` to your public HTTPS base URL |
+
+### 4. Connect
+
+**Gemini** — In [Google AI Studio](https://aistudio.google.com/) or the Gemini app, go to **Tools → MCP**, choose **Add server**, and enter:
+
+```text
+https://<your-public-url>/mcp
+```
+
+Then pick the auth mode you configured (`None`, `API key`, or `Google/OAuth`).
+
+**Claude** — In [claude.ai](https://claude.ai), open **Settings → Connect → MCP Servers**, choose **Add remote MCP server**, and enter the same URL. Claude performs OAuth discovery automatically; when prompted, approve the authorization screen.
+
+> For Claude, remember to run with `MCP_AUTH=oauth` and a public `PUBLIC_URL`, otherwise the connection will be rejected.
+
+After connecting, you can ask either assistant to e.g. *"search OWID for life expectancy and chart the United States"* — it will call the exposed tools (`search_owid`, `generate_chart_html`, `get_dataset_schema`, `get_owid_data_json`, …).
 
 ## Configuration (Valves)
 
