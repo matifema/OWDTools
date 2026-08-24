@@ -31,8 +31,10 @@ MCP endpoint (add this URL in Gemini / Claude):
 
 from __future__ import annotations
 
+import html
 import json
 import os
+import urllib.parse
 from typing import Any, List, Optional
 
 import pandas as pd
@@ -677,41 +679,155 @@ html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-fam
     return instructions + scaffold
 
 
+def _owid_grapher_url(
+    slug: str,
+    tab: Optional[str] = None,
+    time: Optional[str] = None,
+    countries: Optional[List[str]] = None,
+    hide_controls: bool = False,
+) -> str:
+    """Build the official OWID grapher URL (same format as OWID's own
+    share/embed dialog: canonical URL + tab/time/country/hideControls)."""
+    params: List[tuple] = []
+    if tab:
+        params.append(("tab", tab))
+    if hide_controls:
+        params.append(("hideControls", "true"))
+    if countries:
+        try:
+            df = _cached_fetch_df(slug)
+            country_col, _ = _detect_cols(df)
+            if country_col:
+                available = df[country_col].dropna().unique().tolist()
+                countries = [_fuzzy_match_country(c, available) for c in countries]
+        except Exception:
+            pass
+        country_str = "~".join(countries)
+        params.append(("country", urllib.parse.quote(country_str, safe="()~")))
+        if tab == "map":
+            # The map view highlights countries via mapSelect
+            params.append(
+                ("mapSelect", urllib.parse.quote("~" + country_str, safe="()~"))
+            )
+    if time:
+        params.append(("time", urllib.parse.quote(time, safe=".~")))
+
+    query = "&".join(f"{k}={v}" for k, v in params)
+    return f"https://ourworldindata.org/grapher/{slug}" + (f"?{query}" if query else "")
+
+
+def _build_owid_embed_html(url: str, slug: str, height: int) -> str:
+    """HTML page embedding the official OWID grapher in an iframe.
+
+    Uses OWID's own embed iframe attributes (width 100%, border none,
+    web-share allow-list). If the host sandbox blocks external iframes
+    (load never fires), a fallback link is shown instead.
+    """
+    height = max(int(height), 600)
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>{html.escape(slug)}</title>
+<style>
+*,*::before,*::after{{box-sizing:border-box}}
+html,body{{margin:0;padding:0;width:100%;background:#ffffff;color:#4e4e4e;font-family:Lato,'Helvetica Neue',Helvetica,Arial,sans-serif;}}
+</style>
+</head><body>
+<iframe id="owid-frame" src="{url}" loading="lazy"
+  style="width:100%;height:{height}px;border:0px none;display:block;"
+  allow="web-share; clipboard-write" title="Our World in Data chart"></iframe>
+<div id="owid-fallback" style="display:none;padding:32px 16px;text-align:center;font-size:14px;color:#5b5b5b;">
+  <p style="margin:0 0 8px;">This environment blocks embedded OWID charts.</p>
+  <p style="margin:0;"><a href="{url}" target="_blank" rel="noopener" style="color:#002147;font-weight:bold;">Open the official Our World in Data chart &#8599;</a></p>
+</div>
+<div style="text-align:center;margin:8px 0 4px;font-size:12px;color:#767676;">
+  <a href="{url}" target="_blank" rel="noopener" style="color:#767676;text-decoration:none;">View chart on Our World in Data &#8599;</a>
+  &nbsp;&middot;&nbsp; Data: Our World in Data (CC BY)
+</div>
+<script>
+(function(){{
+  var frame = document.getElementById('owid-frame');
+  var loaded = false;
+  frame.addEventListener('load', function(){{ loaded = true; }});
+  setTimeout(function(){{
+    if (!loaded) {{
+      frame.style.display = 'none';
+      document.getElementById('owid-fallback').style.display = 'block';
+    }}
+  }}, 5000);
+  function syncHeight(){{
+    var h = document.documentElement.scrollHeight;
+    try{{ if(window.frameElement) window.frameElement.style.height = h + 'px'; }}catch(e){{}}
+  }}
+  window.addEventListener('load', syncHeight);
+  if(typeof ResizeObserver !== 'undefined') new ResizeObserver(syncHeight).observe(document.body);
+  [300, 900].forEach(function(t){{ setTimeout(syncHeight, t); }});
+}})();
+</script></body></html>"""
+
+
 @mcp.tool
 async def generate_chart_html(
     slug: str,
+    embed: bool = True,
+    tab: Optional[str] = None,
+    time: Optional[str] = None,
     countries: Optional[List[str]] = None,
+    hide_controls: bool = False,
     value_column: Optional[str] = None,
     chart_type: str = "line",
+    log_scale: bool = False,
     year_start: Optional[int] = None,
     year_end: Optional[int] = None,
     title: Optional[str] = None,
     x_label: Optional[str] = None,
     y_label: Optional[str] = None,
-    height: int = 460,
+    height: int = 600,
 ) -> str:
     """
-    Returns fully self-contained HTML with data pre-embedded. Pass the result
-    directly as widget_code to show_widget without modification.
+    Returns fully self-contained HTML for an OWID chart.
 
-    Server-side pipeline: fetches OWID data -> builds Plotly traces -> injects
-    data as inline JS arrays. No runtime fetch() needed — works inside claude.ai
-    sandboxes where external fetch() is blocked by CSP.
+    By default (embed=True) this embeds the REAL interactive Our World in Data
+    grapher in an iframe — official OWID styling, log/linear toggle, source
+    notes, event annotations, and share/download controls — instead of
+    rebuilding a worse copy from raw JSON.
+
+    Only use embed=False when the target environment blocks external iframes
+    (e.g. claude.ai artifact sandboxes): it then rebuilds the chart client-side
+    with the official OWID color palette, Lato/Playfair typography, an optional
+    log/linear toggle, and a source attribution footer.
 
     Args:
         slug: EXACT slug returned by search_owid. Required.
-        countries: List of entity names to include as separate series.
-            If empty, auto-detects the first value column and shows all entities.
-        value_column: Exact column name from the schema to plot on y-axis.
-            Auto-detected from schema if not provided.
-        chart_type: One of: line, bar, area, scatter. Default is line.
-        year_start: Optional start year as integer.
-        year_end: Optional end year as integer.
-        title: Chart title. Auto-generated if not provided.
-        x_label: X-axis label. Defaults to "Year".
-        y_label: Y-axis label. Auto-detected from value_column if not provided.
-        height: Chart height in pixels. Default 460.
+        embed: True (default) -> official OWID grapher iframe.
+               False -> custom Plotly reconstruction from raw data.
+        tab: Optional OWID view: 'chart' (default), 'map', or 'table'.
+        time: Optional time range, e.g. '1950..latest' or '2023'.
+        countries: Optional list of entity names to pre-select (exact names
+                   from search_owid). E.g. ['United States', 'China'] ->
+                   country=USA~CHN in the grapher URL.
+        hide_controls: Hide the grapher's external controls in the embed.
+        value_column: (embed=False only) column from the schema to plot.
+        chart_type: (embed=False only) line | bar | area | scatter.
+        log_scale: (embed=False only) start on log scale and add a
+                   Linear/Log toggle. Avoid if data contains zero/negative
+                   values.
+        year_start / year_end: (embed=False only) integer years.
+        title / x_label / y_label: (embed=False only) chart labels.
+        height: iframe/chart height in pixels (min 600 for the embed).
     """
+    if embed:
+        url = _owid_grapher_url(
+            slug,
+            tab=tab,
+            time=time,
+            countries=countries,
+            hide_controls=hide_controls,
+        )
+        return _build_owid_embed_html(url, slug, height)
+
+    # ── Fallback: custom Plotly reconstruction with official OWID styling ──
     try:
         _check_owid_catalog()
     except RuntimeError as e:
@@ -813,6 +929,8 @@ async def generate_chart_html(
         x_label=x_label or "Year",
         y_label=y_axis_label,
         height=height,
+        log_scale=log_scale,
+        source_url=f"https://ourworldindata.org/grapher/{slug}",
     )
 
 

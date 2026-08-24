@@ -160,24 +160,49 @@ def _clean_series(
 
     return df.sort_values(year_col).reset_index(drop=True)
 
+# Official OWID grapher palette — "OWID Distinct (lines)" color scheme
+# (from owid-grapher/src/color/CustomSchemes.ts, used by their LineCharts)
 _SERIES_COLORS = [
-    "#2082a2", "#bf1b1b", "#588a0f", "#ca6f34",
-    "#0c6947", "#2774c6", "#009655", "#ab348a",
-    "#eb6400", "#17393d", "#660000", "#1b0655",
-    "#cc235c", "#253f77", "#0089be", "#af488f",
+    "#4c6a9c",  # Denim
+    "#b13507",  # Rusty Orange
+    "#996d39",  # Camel (darker)
+    "#2c8465",  # Light Teal (darker)
+    "#6d3e91",  # Purple
+    "#883039",  # Maroon
+    "#00295b",  # Midnight Blue
+    "#a2559c",  # Mauve
+    "#9a5129",  # Dark Copper
+    "#008291",  # Turquoise (darker)
+    "#970046",  # Cherry
+    "#338711",  # Lime (darker)
+    "#c4523e",  # Peach (darker)
+    "#286bbb",  # Blue
+    "#18470f",  # Dark Olive Green
+    "#d73c50",  # Coral
+    "#b16214",  # Copper
+    "#00847e",  # Teal
+    "#cf0a66",  # Fuchsia
+    "#578145",  # Olive Green
+    "#be5915",  # Dark Orange (darker)
+    "#8c4569",  # Dark Mauve
+    "#00875e",  # Tealish Green
+    "#c15065",  # Dusty Coral
 ]
 _PLOTLY_CDN = "2.27.0"
-_BG    = "#ffffff"
-_PANEL = "#f9f9f9"
-_TEXT  = "#002147"
-_MUTED = "#426591"
-_BORDER = "#e0e0e0"
-_GRID  = "#dadada"
+# OWID grapher colors (ColorConstants.ts) and typography
+_BG    = "#ffffff"  # GRAPHER_BACKGROUND
+_PANEL = "#f7f7f7"  # GRAY_5
+_TITLE = "#1d3d63"  # OWID navy — chart titles
+_TEXT  = "#4e4e4e"  # GRAY_90
+_MUTED = "#767676"  # GRAY_70 — axis titles/ticks
+_BORDER = "#e7e7e7"  # GRAY_20
+_GRID  = "#dadada"  # GRAY_30 — gridlines
 _FONT  = "Lato, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+_TITLE_FONT = "'Playfair Display', Georgia, serif"
 def _validate_layout(config: dict) -> dict:
     allowed = {
         "xaxis", "yaxis", "legend", "annotations", "shapes",
-        "margin", "title", "hovermode", "hoverlabel",
+        "margin", "title", "hovermode", "hoverlabel", "updatemenus",
     }
     def _is_safe(k, v):
         if k not in allowed: return False
@@ -187,20 +212,56 @@ def _validate_layout(config: dict) -> dict:
         return True
     return {k: v for k, v in config.items() if _is_safe(k, v)}
 
-def _build_html(title: str, traces: list, x_label: str, y_label: str, height: int = 460, extra_layout: Optional[dict] = None) -> str:
+def _build_html(
+    title: str,
+    traces: list,
+    x_label: str,
+    y_label: str,
+    height: int = 460,
+    extra_layout: Optional[dict] = None,
+    log_scale: bool = False,
+    source_url: Optional[str] = None,
+) -> str:
     layout = {
-        "title": {"text": title, "font": {"size": 18, "color": _TEXT, "family": "'Playfair Display', Georgia, serif"}, "x": 0.04},
+        "title": {"text": title, "font": {"size": 18, "color": _TITLE, "family": _TITLE_FONT}, "x": 0.04},
         "paper_bgcolor": _BG, "plot_bgcolor": _BG,
         "font": {"color": _TEXT, "family": _FONT},
         "margin": {"l": 72, "r": 24, "t": 60, "b": 52},
         "legend": {"bgcolor": "rgba(255,255,255,0.8)", "bordercolor": _BORDER, "borderwidth": 1, "font": {"color": _TEXT, "size": 12}},
-        "xaxis": {"gridcolor": _GRID, "linecolor": _TEXT, "tickcolor": _TEXT, "tickformat": "d", "title": {"text": x_label, "font": {"size": 13, "color": _MUTED}}, "tickfont": {"color": _MUTED}},
+        "xaxis": {"gridcolor": _GRID, "linecolor": _TEXT, "tickcolor": _TEXT, "tickformat": "d", "title": {"text": x_label, "font": {"size": 13, "color": _MUTED}}, "tickfont": {"color": _MUTED}, "showline": False, "zeroline": False},
         "yaxis": {"gridcolor": _GRID, "linecolor": _TEXT, "tickcolor": _TEXT, "title": {"text": y_label, "font": {"size": 13, "color": _MUTED}}, "tickfont": {"color": _MUTED}, "zeroline": True, "zerolinecolor": _GRID, "tickformat": "~s"},
         "hovermode": "x unified",
         "hoverlabel": {"bgcolor": _BG, "bordercolor": _BORDER, "font": {"color": _TEXT, "size": 13, "family": _FONT}},
     }
+    if log_scale:
+        layout["yaxis"]["type"] = "log"
+        # Linear/log toggle — mirrors OWID's scale switcher, important for
+        # emissions/energy data with huge magnitude spread.
+        layout["updatemenus"] = [{
+            "type": "buttons",
+            "direction": "left",
+            "x": 1.0, "xanchor": "right",
+            "y": 1.14, "yanchor": "top",
+            "bgcolor": _BG,
+            "bordercolor": _BORDER,
+            "borderwidth": 1,
+            "font": {"color": _MUTED, "family": _FONT, "size": 12},
+            "pad": {"l": 4, "r": 4},
+            "buttons": [
+                {"label": "Linear", "method": "relayout", "args": [{"yaxis.type": "linear"}]},
+                {"label": "Log", "method": "relayout", "args": [{"yaxis.type": "log"}]},
+            ],
+        }]
     if extra_layout:
         layout.update(_validate_layout(extra_layout))
+
+    footer = ""
+    if source_url:
+        footer = f"""
+<div class="owid-source" style="padding:8px 14px 12px;font-family:{_FONT};font-size:12px;color:{_MUTED};border-top:1px solid {_BORDER};">
+  <span>Data source: <a href="{source_url}" target="_blank" rel="noopener" style="color:{_TITLE};text-decoration:none;">Our World in Data</a></span>
+  <span style="float:right;">Licensed under CC BY · cite the original source when reusing</span>
+</div>"""
 
     return f"""<!doctype html>
 <html lang="en"><head>
@@ -214,6 +275,7 @@ html,body{{margin:0;padding:0;width:100%;background:{_BG};color:{_TEXT};font-fam
 </style>
 </head><body>
 <div id="chart"></div>
+{footer}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
 <script>
 (function(){{
@@ -307,8 +369,20 @@ class Tools:
         max_search_results: int = Field(5, description="Max results from search_owid.")
     def _can_embed(self) -> bool:
         return self.valves.allow_iframe_embedding and HTMLResponse is not None
-    def _render(self, title: str, traces: list, x_label: str, y_label: str, extra_layout: Optional[dict] = None) -> Any:
-        page = _build_html(title, traces, x_label, y_label, self.valves.chart_height_px, extra_layout=extra_layout)
+    def _render(
+        self,
+        title: str,
+        traces: list,
+        x_label: str,
+        y_label: str,
+        extra_layout: Optional[dict] = None,
+        log_scale: bool = False,
+        source_url: Optional[str] = None,
+    ) -> Any:
+        page = _build_html(
+            title, traces, x_label, y_label, self.valves.chart_height_px,
+            extra_layout=extra_layout, log_scale=log_scale, source_url=source_url,
+        )
         if self._can_embed():
             return HTMLResponse(content=page, headers={"Content-Disposition": "inline"})  # type: ignore
         return _ascii_fallback(traces, title)
@@ -462,10 +536,16 @@ class Tools:
         custom_js_config: Optional[dict] = None,
         value_column: Optional[str] = None,
         chart_type: str = "line",
+        log_scale: bool = False,
     ) -> Any:
         """
         Fetch data and render a custom Plotly chart.
         Supports single country or a list of countries for comparison.
+
+        NOTE: for the authentic OWID visualization use chart_owid_data, which
+        embeds the official interactive grapher. This tool rebuilds the chart
+        from raw data (OWID colors/fonts, optional log/linear toggle, source
+        attribution footer) for custom analyses OWID does not offer.
         """
         if fetch is None: return "Error: owid-catalog not installed."
         try: df = _cached_fetch_df(slug).copy()
@@ -489,7 +569,11 @@ class Tools:
         chart_title = f"{slug.replace('-', ' ').title()} Analysis"
         if len(target_countries) > 1: chart_title += " — Comparison"
         y_label = str(val_col).replace("_", " ").title()
-        result = self._render(chart_title, traces, "Year", y_label, extra_layout=custom_js_config)
+        result = self._render(
+            chart_title, traces, "Year", y_label,
+            extra_layout=custom_js_config, log_scale=log_scale,
+            source_url=f"https://ourworldindata.org/grapher/{slug}",
+        )
         if missing and isinstance(result, str): result += f"\n\n> Warning: no data for {', '.join(missing)}"
         return result
     async def get_owid_data(

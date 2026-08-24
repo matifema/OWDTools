@@ -124,6 +124,8 @@ Choose **No authentication** (or API key / OAuth if you enabled them).
 
 After connecting, you can ask either assistant to e.g. *"search OWID for life expectancy and chart the United States"* — it will call the exposed tools (`search_owid`, `generate_chart_html`, `get_dataset_schema`, `get_owid_data_json`, …).
 
+> `generate_chart_html` embeds the **real** interactive OWID grapher (official styling, log/linear toggle, source notes, share/download controls) by default. It only falls back to a custom Plotly reconstruction — with OWID's own color palette, Lato/Playfair fonts, log toggle, and CC BY attribution — when you pass `embed=false` (e.g. for sandboxes that block external iframes).
+
 ## Configuration (Valves)
 
 You can configure the tool's behavior via the Valves settings in Open WebUI:
